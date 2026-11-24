@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,11 +56,21 @@ def checkout(pr: PullRequest, dest: Path) -> None:
     """Clone the repo into `dest` and detach at the PR's head SHA (fork PRs come via pull/N/head)."""
     _run(["git", *_GH_AUTH, "clone", "--quiet", f"{pr.repo_url}.git", str(dest)], "git clone")
     _run(["git", *_GH_AUTH, "-C", str(dest), "fetch", "--quiet", "origin", f"pull/{pr.number}/head", pr.base_sha], "git fetch")
-    _run(["git", "-C", str(dest), "-c", "advice.detachedHead=false", "checkout", "--quiet", pr.head_sha], "git checkout")
+    detach(dest, pr.head_sha)
+
+
+def detach(dest: Path, sha: str) -> None:
+    _run(["git", "-C", str(dest), "-c", "advice.detachedHead=false", "checkout", "--quiet", sha], "git checkout")
 
 
 def _run(argv: list[str], what: str) -> str:
-    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    env = None
+    if argv[0] == "git":
+        # PR code can opt into any filter the host's git config defines (git-lfs is set up globally on
+        # GitHub runners, and a fork's .lfsconfig picks its server). Ignore global and system config so
+        # cloning and checking out never run a filter or contact a host the PR chose.
+        env = os.environ | {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False, env=env)
     if proc.returncode != 0:
         raise PullRequestError(f"{what} failed: {proc.stderr.strip()[-1500:]}")
     return proc.stdout
