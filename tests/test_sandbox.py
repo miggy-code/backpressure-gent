@@ -67,3 +67,9 @@ def test_flooded_output_is_capped_without_buffering_it(sandbox: Sandbox) -> None
     assert "[output cut at" in result.output
     assert len(result.output) < 1_100_000
     assert grown_mb < 100
+
+
+def test_docker_reports_only_the_sandbox_environment(sandbox: Sandbox) -> None:
+    names = {entry.split("=", 1)[0] for entry in sandbox.env()}
+    assert {"HOME", "PATH", "VIRTUAL_ENV"} <= names
+    assert not names & {"DEEPSEEK_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "AGENTGATE_OPENAI_COMPATIBLE_API_KEY"}

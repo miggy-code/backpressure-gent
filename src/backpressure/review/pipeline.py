@@ -64,10 +64,13 @@ def review_pr(
     max_usd: str = "1.00",
     max_calls: int = 80,
     max_steps: int = 60,
+    head_sha: str | None = None,
 ) -> Outcome:
     pull = prs.load(repo, number)
     if pull.state != "OPEN":
         raise ReviewError(f"{repo}#{number} is {pull.state.lower()}, not open")
+    if head_sha and pull.head_sha != head_sha:
+        raise ReviewError(f"the PR head moved from {head_sha[:7]} to {pull.head_sha[:7]} after the review was requested; request it again")
     out = out_dir or Path(".backpressure") / f"review-{number}-{pull.head_sha[:7]}"
     out.mkdir(parents=True, exist_ok=True)
     api_key = load_api_key()
@@ -92,6 +95,7 @@ def review_pr(
         with contextlib.ExitStack() as stack:
             box = stack.enter_context(Sandbox(checkout))
             (out / "setup.log").write_text(box.setup_log)
+            _check_sandbox_env(box.env(), api_key, out)
             run = stack.enter_context(gateway)
             client = OpenAICompatibleClient(run.base_url, run.token, model)
             result = run_loop(client, Toolbox(box, ledger), system, kickoff, validate, max_steps=max_steps)
@@ -103,6 +107,14 @@ def review_pr(
     _write(out, "ledger.json", ledger.to_json())
     _write(out, "gate.json", gate.to_json())
     return _finish(result, gate, pull, model, spent, out, ledger)
+
+
+def _check_sandbox_env(env: list[str], api_key: str, out: Path) -> None:
+    """Record the work container's variable names and stop if any secret this process holds is among the values."""
+    _write(out, "sandbox-env.json", json.dumps(sorted(e.split("=", 1)[0] for e in env)))
+    secrets = [api_key, *(os.environ.get(k) for k in ("GH_TOKEN", "GITHUB_TOKEN"))]
+    if any(secret and secret in entry for secret in secrets for entry in env):
+        raise ReviewError("a secret reached the sandbox environment; stopping before the model runs")
 
 
 def build_kickoff(pull: prs.PullRequest, base: str, gate: Report, rules: str) -> str:

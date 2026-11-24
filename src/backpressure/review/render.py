@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -52,34 +53,36 @@ def to_markdown(review: Review, verdict: Verdict, gate: list[GateFinding], run: 
 
     attention = []
     if review.close:
-        attention.append(f"- {BAD} **Close ({review.close.reason})**: {review.close.explanation} {_cite(review.close.evidence)}")
+        attention.append(f"- {BAD} **Close ({review.close.reason})**: {clean(review.close.explanation)} {_cite(review.close.evidence)}")
     for f in blocking:
-        attention.append(f"- {BAD} **{f.title}** ({_where(f.path, f.line, run)}): {_one_line(f.body)} {_cite(f.evidence)}")
+        attention.append(f"- {BAD} **{clean(f.title)}** ({_where(f.path, f.line, run)}): {clean(_one_line(f.body))} {_cite(f.evidence)}")
     for g in unresolved:
         adj = next((a for a in review.tamper if (a.code, a.path, a.test) == (g.code, g.path, g.test)), None)
-        why = f"confirmed: {adj.explanation}" if adj else "not adjudicated by the reviewer"
+        why = f"confirmed: {clean(adj.explanation)}" if adj else "not adjudicated by the reviewer"
         test = f" `{g.test}`" if g.test else ""
         attention.append(f"- {BAD} **Tamper `{g.code}`**{test} ({_where(g.path, None, run)}): {why}")
     if card.checks == "not_run":
         attention.append(f"- {WARN} **Checks not run**: see Not verified.")
     for f in minor:
-        attention.append(f"- {WARN} **{f.title}** ({_where(f.path, f.line, run)}): {_one_line(f.body)} {_cite(f.evidence)}")
+        attention.append(f"- {WARN} **{clean(f.title)}** ({_where(f.path, f.line, run)}): {clean(_one_line(f.body))} {_cite(f.evidence)}")
     if attention:
         lines += ["**Needs attention**", "", *attention, ""]
 
-    details = [f"**Intent:** {review.intent}", ""]
+    details = [f"**Intent:** {clean(review.intent)}", ""]
     if review.fit_notes:
-        details += [f"**Fit:** {review.fit_notes}", ""]
+        details += [f"**Fit:** {clean(review.fit_notes)}", ""]
     details += ["**Verified**", ""]
-    details += [f"- {v.claim} ({', '.join(f'`{r}`' for r in v.runs)})" for v in review.verified] or ["- Nothing."]
+    details += [f"- {clean(v.claim)} ({', '.join(f'`{r}`' for r in v.runs)})" for v in review.verified] or ["- Nothing."]
     details += ["", "**Not verified**", ""]
-    details += [f"- {n}" for n in review.not_verified] or ["- Nothing listed."]
+    details += [f"- {clean(n)}" for n in review.not_verified] or ["- Nothing listed."]
     explained = [a for a in review.tamper if a.status == "explained"]
     if explained:
         details += ["", "**Tamper findings explained**", ""]
-        details += [f"- `{a.code}` {a.path}{f' `{a.test}`' if a.test else ''}: {a.explanation} {_cite(a.evidence)}" for a in explained]
+        for a in explained:
+            test = f" `{a.test}`" if a.test else ""
+            details.append(f"- `{a.code}` {a.path}{test}: {clean(a.explanation)} {_cite(a.evidence)}")
     if review.risk_notes:
-        details += ["", f"**Risk:** {review.risk_notes}"]
+        details += ["", f"**Risk:** {clean(review.risk_notes)}"]
     if ledger is not None:
         details += ["", "**Evidence runs**", "", *_evidence_runs(review, ledger)]
     u = run.usage
@@ -103,6 +106,12 @@ def to_json(review: Review, verdict: Verdict, gate: list[GateFinding], run: RunI
         "run": {**asdict(run), "usage": asdict(run.usage)},
     }
     return json.dumps(data, indent=2)
+
+
+def clean(text: str) -> str:
+    """Model text is untrusted: no raw HTML, and no @mentions that would notify people when posted."""
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return re.sub(r"@(?=[A-Za-z0-9-])", "@\u200b", text)
 
 
 def _evidence_runs(review: Review, ledger: Ledger) -> list[str]:
