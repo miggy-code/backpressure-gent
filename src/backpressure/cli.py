@@ -24,12 +24,19 @@ def main(argv: list[str] | None = None) -> int:
     tamper.add_argument("-C", dest="cwd", default=None, help="Run in this git checkout.")
     args = parser.parse_args(argv)
 
+    if not args.base:
+        print(
+            "backpressure: no base ref. Pass --base (the action defaults it on pull_request events), "
+            "and check out with fetch-depth: 0 so the merge base is available.",
+            file=sys.stderr,
+        )
+        return 2
     try:
         head_sha = gitdiff.rev_parse(args.head, args.cwd)
         base_sha = gitdiff.merge_base(gitdiff.rev_parse(args.base, args.cwd), head_sha, args.cwd)
         report = Report(base_sha, head_sha, analyze(gitdiff.changes(base_sha, head_sha, args.cwd)))
     except gitdiff.GitError as exc:
-        print(f"backpressure: {exc}", file=sys.stderr)
+        print(f"backpressure: {exc}. If the ref exists, check out with fetch-depth: 0 so history is available.", file=sys.stderr)
         return 2
 
     markdown = report.to_markdown(args.repo_url)

@@ -102,7 +102,7 @@ def test_test_moved_to_another_file_is_not_removed():
     assert findings == []
 
 
-def test_moved_test_is_still_compared_at_its_new_home():
+def test_moved_and_edited_test_is_reported_as_removed():
     moved = "def test_add():\n    assert 1 + 1 == 2\n"
     remaining = BASE.replace("def test_add():\n    assert 1 + 1 == 2\n    assert 2 + 2 == 4\n", "")
     findings = analyze(
@@ -111,7 +111,9 @@ def test_moved_test_is_still_compared_at_its_new_home():
             FileChange("tests/test_add.py", None, moved),
         ]
     )
-    assert [(f.code, f.path) for f in findings] == [("assertions_reduced", "tests/test_add.py")]
+    # A moved test that also changed is not trusted as a move: it is reported as removed, naming the new file.
+    assert [(f.code, f.path) for f in findings] == [("test_removed", "tests/test_math.py")]
+    assert "tests/test_add.py" in findings[0].message
 
 
 def test_renamed_file_compares_old_contents():
@@ -144,3 +146,27 @@ def test_non_test_python_files_are_ignored():
 def test_is_test_file():
     assert is_test_file("tests/test_a.py") and is_test_file("pkg/a_test.py")
     assert not is_test_file("tests/conftest.py") and not is_test_file("src/testing.py")
+
+
+def test_same_name_test_elsewhere_does_not_mask_a_deletion():
+    findings = analyze(
+        [
+            FileChange("tests/test_json.py", "def test_parse():\n    assert parse('1') == 1\n", ""),
+            FileChange("tests/test_yaml.py", None, "def test_parse():\n    assert yaml_ok() is not None\n"),
+        ]
+    )
+    assert [(f.code, f.path) for f in findings] == [("test_removed", "tests/test_json.py")]
+    assert "tests/test_yaml.py" in findings[0].message
+
+
+def test_removed_test_in_renamed_file_points_at_the_old_path():
+    base = "def test_a():\n    assert 1\n\n\ndef test_b():\n    assert 2\n"
+    (finding,) = analyze([FileChange("tests/test_new.py", base, "def test_a():\n    assert 1\n", old_path="tests/test_old.py")])
+    assert (finding.code, finding.path, finding.at_base) == ("test_removed", "tests/test_old.py", True)
+
+
+def test_importorskip_and_raised_skiptest_count_as_skips():
+    base = "def test_a():\n    assert g()\n"
+    for body in ("    pytest.importorskip('numpy')\n", "    raise unittest.SkipTest('later')\n"):
+        head = "import pytest, unittest\ndef test_a():\n" + body + "    assert g()\n"
+        assert codes(edit(head, base)) == ["skip_added"], body

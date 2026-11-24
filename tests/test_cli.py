@@ -93,3 +93,9 @@ def test_step_summary_is_appended(repo, tmp_path, monkeypatch):
 def test_bad_ref_exits_two(repo, monkeypatch):
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     assert main(["tamper", "--base", "nope", "-C", str(repo)]) == 2
+
+
+def test_missing_base_explains_the_fix(repo, monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    assert main(["tamper", "--base", "", "-C", str(repo)]) == 2
+    assert "fetch-depth: 0" in capsys.readouterr().err

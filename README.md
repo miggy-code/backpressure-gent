@@ -12,13 +12,13 @@ It compares each changed Python test file at head with the PR's merge base.
 |---|---|---|
 | `test_removed` | blocking | `def test_refund_rounding` existed at the merge base and is gone |
 | `test_file_deleted` | blocking | `tests/test_billing.py` deleted, and its tests do not reappear elsewhere |
-| `skip_added` | blocking | new `@pytest.mark.skip`, `xfail`, `unittest.skip`, `pytestmark = ...`, or `pytest.skip()` in the body |
+| `skip_added` | blocking | new `@pytest.mark.skip`, `xfail`, `unittest.skip`, `pytestmark = ...`, or `pytest.skip()`, `pytest.importorskip()`, `raise unittest.SkipTest` in the body |
 | `assertions_reduced` | blocking | a test went from 3 assertions to 1 (`assert`, `self.assert*`, `mock.assert_*`, `pytest.raises`) |
 | `trivial_assertion_added` | blocking | `assert x == expected` became `assert True` |
 | `test_config_changed` | warning | `conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`, `noxfile.py`, `.coveragerc`, or the `[tool.pytest]` / `[tool.coverage]` tables of `pyproject.toml` changed |
 | `unparseable` | warning | a test file at head does not parse, so it was not compared |
 
-New tests and new test files are never findings. A test moved to another file is followed to its new home and compared there. A pure rename is clean.
+New tests and new test files are never findings. A test moved unchanged to another file is clean; if it was also edited, it is reported as removed and the new file is named, so a same-named weaker test elsewhere cannot hide a deletion. A pure rename is clean.
 
 The gate makes no network or model calls, needs no secrets, and never runs the PR's code; it parses it. That makes it safe on pull requests from forks.
 
@@ -55,6 +55,7 @@ uv run backpressure tamper --base origin/main --json report.json
 
 - Python and pytest/unittest conventions only (`test_*.py`, `*_test.py`, functions and methods named `test*`).
 - Assertion counts are syntactic. Weakening an assertion while keeping its count (`==` to `!=`, a looser `pytest.approx`) is not caught yet.
+- Honest refactors can trip it: merging tests into one `@pytest.mark.parametrize` test reports the originals as removed, and moving assertions into a helper reports fewer assertions. There is no per-PR override yet; use `fail-on: never` to report only, or review and merge with an admin bypass. An override arrives with the reviewer.
 - A PR that edits the workflow or `CODEOWNERS` can still switch the gate off. Protect `.github/` with CODEOWNERS and a ruleset. In this repository the dogfood workflow uses `./`, so it runs the PR's own copy of the action.
 
 ## Roadmap

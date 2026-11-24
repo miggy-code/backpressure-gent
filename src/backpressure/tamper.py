@@ -30,7 +30,7 @@ SKIP_DECORATORS = {
     "skipUnless",
     "expectedFailure",
 }
-SKIP_CALLS = {"pytest.skip", "pytest.xfail", "self.skipTest"}
+SKIP_CALLS = {"pytest.skip", "pytest.xfail", "pytest.importorskip", "self.skipTest"}
 RAISES_CALLS = {"pytest.raises", "pytest.warns", "raises", "warns"}
 
 
@@ -50,6 +50,7 @@ class TestInfo:
     assertions: int
     trivial: int
     skips: int
+    body: str  # AST without line numbers: identifies an unchanged test that moved files
 
 
 def is_test_file(path: str) -> bool:
@@ -63,6 +64,7 @@ def analyze(changes: list[FileChange]) -> list[Finding]:
     base_tests: dict[str, dict[str, TestInfo]] = {}
     head_tests: dict[str, dict[str, TestInfo]] = {}
     unparseable: set[str] = set()
+    base_path: dict[str, str] = {}  # head path -> path of the same file at the merge base
 
     for ch in changes:
         if PurePosixPath(ch.path).name in CONFIG_FILES or PurePosixPath(ch.path).name == "pyproject.toml":
@@ -72,6 +74,7 @@ def analyze(changes: list[FileChange]) -> list[Finding]:
             parsed = _collect(ch.base_src)
             if parsed is not None:
                 base_tests[ch.path] = parsed
+                base_path[ch.path] = ch.old_path or ch.path
         if is_test_file(ch.path) and ch.head_src is not None:
             parsed = _collect(ch.head_src)
             if parsed is None:
@@ -99,9 +102,12 @@ def analyze(changes: list[FileChange]) -> list[Finding]:
         missing: list[str] = []
         for name, before in tests.items():
             after = head.get(name) if head is not None else None
-            where = path
+            note = ""
             if after is None and name in added_elsewhere:
-                where, after = added_elsewhere[name]
+                new_path, candidate = added_elsewhere[name]
+                if candidate.body == before.body:
+                    continue  # moved unchanged
+                note = f" A different test with this name was added in {new_path}."
             if after is None:
                 missing.append(name)
                 if not deleted:
@@ -109,21 +115,21 @@ def analyze(changes: list[FileChange]) -> list[Finding]:
                         Finding(
                             "test_removed",
                             Severity.BLOCKING,
-                            path,
-                            "Test exists at the merge base and is gone at head.",
+                            base_path[path],
+                            "Test exists at the merge base and is gone at head." + note,
                             name,
                             before.line,
                             at_base=True,
                         )
                     )
                 continue
-            findings += _compare(where, name, before, after)
+            findings += _compare(path, name, before, after)
         if deleted and missing:
             findings.append(
                 Finding(
                     "test_file_deleted",
                     Severity.BLOCKING,
-                    path,
+                    base_path[path],
                     f"Test file deleted; {len(missing)} of its {len(tests)} tests do not reappear elsewhere: {', '.join(missing[:5])}"
                     + (" ..." if len(missing) > 5 else ""),
                     at_base=True,
@@ -188,7 +194,9 @@ def _info(func: ast.FunctionDef | ast.AsyncFunctionDef, inherited_skips: int) ->
                 assertions += 1
             elif name in SKIP_CALLS or last == "skipTest":
                 skips += 1
-    return TestInfo(func.lineno, assertions, trivial, skips + inherited_skips + _decorator_skips(func))
+        elif isinstance(node, ast.Raise) and node.exc is not None and _dotted(node.exc).endswith(("SkipTest", "skip.Exception")):
+            skips += 1
+    return TestInfo(func.lineno, assertions, trivial, skips + inherited_skips + _decorator_skips(func), ast.dump(func))
 
 
 def _decorator_skips(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> int:
