@@ -1,0 +1,30 @@
+[project]
+name = "backpressure"
+version = "0.1.0"
+description = "Verification gate for agent-written pull requests: catches test tampering before review."
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+    { name = "miggy-code", email = "65788861+miggy-code@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+backpressure = "backpressure:main"
+
+[build-system]
+requires = ["uv_build>=0.9.27,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+
+[tool.ruff]
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
