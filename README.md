@@ -83,6 +83,16 @@ The PR title, body and diff are given to the model as untrusted data. Code you r
 
 Every job checks out the base branch, so the workflow never runs the PR's own version of Backpressure. To set it up, create an environment named `review` that only the default branch may use, and store `DEEPSEEK_API_KEY` in it. Fork PRs are refused unless the repository variable `BACKPRESSURE_ALLOW_FORKS` is `true`. Model text is escaped before posting, so it cannot @mention people or inject HTML.
 
+Labels the workflow uses:
+
+| Label | Added by | Meaning |
+|---|---|---|
+| `backpressure-review` | a maintainer | Run the reviewer on this PR. Removed when the run ends, so adding it again retries. |
+| `backpressure-approved` | the workflow | The review's verdict is approve. |
+| `backpressure-request-changes` | the workflow | The review's verdict is request changes. |
+| `backpressure-close` | the workflow | The review found a prompt injection or a duplicate PR. |
+| `backpressure-override` | a maintainer | The tamper gate lists its findings as overridden and passes. |
+
 ### Holdout scenarios
 
 Holdouts are tests the coding agent never sees: they live in a separate private repo (`OWNER/REPO/test_*.py`), not in the repo under review. Code, not the model, runs them in their own container against the merge base and the head, and a holdout that passes at the base and fails at the head blocks the PR (Holdouts ❌ on the scorecard). The model's container never mounts them, and reviews show counts only, so a public review cannot leak a holdout back to the agent. Locally: `backpressure review ... --holdouts DIR`. In the workflow: a read-only deploy key for the holdouts repo in the `review` environment as `HOLDOUTS_DEPLOY_KEY` (repo name from the variable `BACKPRESSURE_HOLDOUTS_REPO`); without it, reviews run without holdouts.
