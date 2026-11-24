@@ -66,7 +66,7 @@ class Gateway:
         self._dir: Path | None = None
         self._proc: subprocess.Popen[bytes] | None = None
         self.run: GatewayRun | None = None
-        self.spend: dict[str, object] | None = None
+        self.spend: dict[str, str] | None = None
 
     def __enter__(self) -> GatewayRun:
         self._dir = Path(tempfile.mkdtemp(prefix="backpressure-gateway-"))
@@ -134,11 +134,14 @@ class Gateway:
             time.sleep(0.2)
         raise GatewayError("model proxy did not become ready in time")
 
-    def _read_spend(self, run_id: str) -> dict[str, object] | None:
+    def _read_spend(self, run_id: str) -> dict[str, str] | None:
         proc = subprocess.run(
             [_agentgate(), "spend", "show", *self._common(), "--run", run_id], capture_output=True, text=True, check=False, env=_base_env()
         )
-        return {"raw": proc.stdout.strip()} if proc.returncode == 0 else None
+        if proc.returncode != 0:
+            return None
+        # Lines of "<key> <value>": run, spent_usd, calls, open, settled, released.
+        return dict(line.split(" ", 1) for line in proc.stdout.strip().splitlines() if " " in line)
 
 
 def _agentgate() -> str:
