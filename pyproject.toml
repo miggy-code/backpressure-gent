@@ -8,7 +8,10 @@ authors = [
     { name = "miggy-code", email = "65788861+miggy-code@users.noreply.github.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "openai>=3.58.0",
+    "panoptes-agentgate",
+]
 
 [project.scripts]
 backpressure = "backpressure:main"
@@ -28,3 +31,6 @@ line-length = 140
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.uv.sources]
+panoptes-agentgate = { git = "https://github.com/miggy-code/agentgate", rev = "e01b7680a5a46706ba925570ece19f5efb3b847a" }
