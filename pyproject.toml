@@ -26,6 +26,10 @@ dev = [
     "ruff>=0.17.6",
 ]
 
+[tool.pytest.ini_options]
+pythonpath = ["tests"]
+markers = ["docker: needs a running Docker daemon"]
+
 [tool.ruff]
 line-length = 140
 
