@@ -125,40 +125,25 @@ class Sandbox:
 
     def exec(self, command: str, timeout: int = 120) -> RunResult:
         assert self._container, "sandbox is not running"
-        start = time.monotonic()
         # `timeout` signals the whole process group inside the container; the host-side timeout
         # is only a backstop if docker itself hangs.
-        argv = ["docker", "exec", self._container, "timeout", "-k", "5", str(timeout), "sh", "-c", command]
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        kept = bytearray()
-        total = 0
+        return _stream(["docker", "exec", self._container, "timeout", "-k", "5", str(timeout), "sh", "-c", command], command, timeout)
 
-        def drain() -> None:
-            # Keep the first MAX_CAPTURE bytes and discard the rest, so a flood cannot exhaust host memory.
-            nonlocal total
-            assert proc.stdout is not None
-            while chunk := proc.stdout.read(65536):
-                total += len(chunk)
-                if len(kept) < MAX_CAPTURE:
-                    kept.extend(chunk[: MAX_CAPTURE - len(kept)])
+    def run_isolated(self, command: str, mounts: dict[Path, str], timeout: int = 600) -> RunResult:
+        """Run in a fresh container from the installed image, apart from the model's work container.
 
-        reader = threading.Thread(target=drain, daemon=True)
-        reader.start()
+        Used for checks the model must not see, such as holdouts: `mounts` are bind-mounted read-only
+        here and never in the work container. Same limits, no network, removed afterwards.
+        """
+        assert self._image, "sandbox is not running"
+        name = f"backpressure-isolated-{uuid.uuid4().hex[:12]}"
+        env = [arg for k, v in WORK_ENV.items() for arg in ("-e", f"{k}={v}")]
+        volumes = [arg for host, target in mounts.items() for arg in ("-v", f"{host.resolve()}:{target}:ro")]
+        argv = ["docker", "run", "--name", name, *LIMITS, *env, *volumes, "-w", "/work", self._image]
         try:
-            code = proc.wait(timeout=timeout + 30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            code = proc.wait()
-            code = 124
-        reader.join(timeout=10)
-        seconds = time.monotonic() - start
-        output = bytes(kept).decode("utf-8", errors="replace")
-        if total > MAX_CAPTURE:
-            output += f"\n[output cut at {MAX_CAPTURE} of {total} bytes]"
-        timed_out = code in (124, 137) and seconds >= timeout
-        if timed_out:
-            output += f"\n[killed after {timeout}s timeout]"
-        return RunResult(command, code, output, timed_out, round(seconds, 2))
+            return _stream([*argv, "timeout", "-k", "5", str(timeout), "sh", "-c", command], command, timeout)
+        finally:
+            _docker("rm", "-f", name, check=False)
 
     def env(self) -> list[str]:
         """The work container's environment as Docker sees it (KEY=value entries)."""
@@ -171,6 +156,40 @@ class Sandbox:
         if proc.returncode != 0:
             raise FileNotFoundError(proc.stderr.decode(errors="replace").strip() or path)
         return proc.stdout.decode("utf-8", errors="replace")
+
+
+def _stream(argv: list[str], command: str, timeout: int) -> RunResult:
+    start = time.monotonic()
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    kept = bytearray()
+    total = 0
+
+    def drain() -> None:
+        # Keep the first MAX_CAPTURE bytes and discard the rest, so a flood cannot exhaust host memory.
+        nonlocal total
+        assert proc.stdout is not None
+        while chunk := proc.stdout.read(65536):
+            total += len(chunk)
+            if len(kept) < MAX_CAPTURE:
+                kept.extend(chunk[: MAX_CAPTURE - len(kept)])
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    try:
+        code = proc.wait(timeout=timeout + 30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        code = 124
+    reader.join(timeout=10)
+    seconds = time.monotonic() - start
+    output = bytes(kept).decode("utf-8", errors="replace")
+    if total > MAX_CAPTURE:
+        output += f"\n[output cut at {MAX_CAPTURE} of {total} bytes]"
+    timed_out = code in (124, 137) and seconds >= timeout
+    if timed_out:
+        output += f"\n[killed after {timeout}s timeout]"
+    return RunResult(command, code, output, timed_out, round(seconds, 2))
 
 
 def docker_available() -> bool:

@@ -30,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--model", default="deepseek-v4-pro", choices=["deepseek-v4-pro", "deepseek-flash"])
     review.add_argument("--max-usd", default="1.00", help="Dollar cap the model proxy enforces (default 1.00).")
     review.add_argument("--head-sha", help="Refuse to review unless the PR head is still this commit.")
+    review.add_argument("--holdouts", type=Path, help="Folder of private holdout tests, laid out as OWNER/REPO/test_*.py.")
     gh_start = sub.add_parser("github-start", help="Workflow: check the requester, post the status comment.")
     gh_finish = sub.add_parser("github-finish", help="Workflow: post the review and its label, remove the trigger label.")
     for p in (gh_start, gh_finish):
@@ -79,7 +80,15 @@ def _review(args: argparse.Namespace) -> int:
     from backpressure.review.schema import Verdict
 
     try:
-        outcome = review_pr(args.repo, args.pr, args.out, model=args.model, max_usd=args.max_usd, head_sha=args.head_sha)
+        outcome = review_pr(
+            args.repo,
+            args.pr,
+            args.out,
+            model=args.model,
+            max_usd=args.max_usd,
+            head_sha=args.head_sha,
+            holdouts_root=args.holdouts,
+        )
     except (ReviewError, RuntimeError) as exc:
         print(f"backpressure: {exc}", file=sys.stderr)
         return 2
