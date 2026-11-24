@@ -35,7 +35,8 @@ def test_problems_are_listed_and_linked() -> None:
     f = ReviewFinding("blocking", "Untested branch", "Breaking it\nleaves tests green.", "app.py", [Evidence("r4", "x" * 10)], line=12)
     md = to_markdown(make(findings=[f]), Verdict.REQUEST_CHANGES, [GATE], RUN)
     assert "❌ Request changes" in md
-    assert "**Untested branch** ([app.py:12](https://github.com/o/r/blob/abc1234def/app.py#L12)): Breaking it leaves tests green. (`r4`)" in md
+    link = "[app.py:12](https://github.com/o/r/blob/abc1234def/app.py#L12)"
+    assert f"**Untested branch** ({link}): Breaking it leaves tests green. (`r4`)" in md
     assert "**Tamper `skip_added`** `test_x`" in md and "not adjudicated" in md
     assert "❌ 1 open" in md
 
@@ -52,3 +53,17 @@ def test_json_carries_verdict_and_usage() -> None:
     data = json.loads(to_json(make(), Verdict.APPROVE, [GATE], RUN))
     assert data["verdict"] == "approve" and data["run"]["usage"]["cached_tokens"] == 800
     assert data["unresolved_tamper"][0]["code"] == "skip_added"
+
+
+def test_cited_runs_show_their_commands() -> None:
+    # A model can quote its own `echo`; showing each cited command makes that visible to the reader.
+    from backpressure.review.tools import Ledger
+
+    ledger = Ledger()
+    ledger.add("run", "python -m pytest -q", 0, "3 passed")
+    ledger.add("run", "echo 'tests fail badly'\necho more", 0, "tests fail badly")
+    f = ReviewFinding("blocking", "Fails", "Body.", "app.py", [Evidence("r2", "tests fail badly")])
+    md = to_markdown(make(findings=[f]), Verdict.REQUEST_CHANGES, [], RUN, ledger)
+    assert "**Evidence runs**" in md
+    assert "- `r1` exit 0: `python -m pytest -q`" in md
+    assert "- `r2` exit 0: `echo 'tests fail badly' …`" in md

@@ -102,7 +102,7 @@ def review_pr(
     _write(out, "transcript.json", json.dumps(result.messages, indent=2))
     _write(out, "ledger.json", ledger.to_json())
     _write(out, "gate.json", gate.to_json())
-    return _finish(result, gate, pull, model, spent, out)
+    return _finish(result, gate, pull, model, spent, out, ledger)
 
 
 def build_kickoff(pull: prs.PullRequest, base: str, gate: Report, rules: str) -> str:
@@ -140,7 +140,7 @@ def _rules(checkout: Path, base_sha: str) -> str:
     return text or resources.files("backpressure.review").joinpath("prompts/default-review.md").read_text()
 
 
-def _finish(result: LoopResult, gate: Report, pull: prs.PullRequest, model: str, spent: str | None, out: Path) -> Outcome:
+def _finish(result: LoopResult, gate: Report, pull: prs.PullRequest, model: str, spent: str | None, out: Path, ledger: Ledger) -> Outcome:
     info = RunInfo(model, pull.head_sha, pull.repo_url, result.usage, result.calls, result.steps, spent)
     if result.review is None:
         cost = f" Spent ${spent}." if spent else ""
@@ -148,7 +148,7 @@ def _finish(result: LoopResult, gate: Report, pull: prs.PullRequest, model: str,
         _write(out, "review.md", md)
         return Outcome(None, result.status, md, out, result.errors)
     v = verdict(result.review, gate.findings)
-    md = to_markdown(result.review, v, gate.findings, info)
+    md = to_markdown(result.review, v, gate.findings, info, ledger)
     _write(out, "review.md", md)
     _write(out, "review.json", to_json(result.review, v, gate.findings, info))
     return Outcome(v, result.status, md, out, [])
