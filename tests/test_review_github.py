@@ -125,3 +125,12 @@ def test_review_for_another_head_is_not_posted(tmp_path: Path) -> None:
 
 def test_clean_neutralises_mentions_and_html() -> None:
     assert clean("ping @octocat <script>x</script> a@b.c") == "ping @​octocat &lt;script&gt;x&lt;/script&gt; a@​b.c"
+
+
+def test_failure_note_from_the_review_job_is_escaped(tmp_path: Path) -> None:
+    api = FakeApi()
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "review.md").write_text("### no review (invalid)\n- findings[0].path '@everyone' is not a file changed\n")
+    finish(api, REPO, 1, out, 77, HEAD, "https://run")
+    assert "@\u200beveryone" in api.made("PATCH", "/issues/comments/77")[0]["body"]

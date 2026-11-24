@@ -94,7 +94,7 @@ def finish(api: GitHubApi, repo: str, number: int, out: Path | None, comment_id:
         review = _load(out)
         if review is None:
             md = out / "review.md" if out else None
-            note = md.read_text() if md and md.exists() else "The review job failed before writing a review."
+            note = clean(md.read_text()) if md and md.exists() else "The review job failed before writing a review."
             _status(api, repo, comment_id, f"Backpressure review did not finish. [Run]({run_url})\n\n{note}")
             return None
         if review["head_sha"] != head_sha:
