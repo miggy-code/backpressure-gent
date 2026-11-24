@@ -45,13 +45,15 @@ class Report:
         return "overridden" if self.overridden else "fail"
 
     def to_json(self) -> str:
+        # Each property filters the whole list; compute them once.
+        blocking, warnings = self.blocking, self.warnings
         return json.dumps(
             {
-                "verdict": self.verdict,
+                "verdict": "pass" if not blocking else ("overridden" if self.overridden else "fail"),
                 "base_sha": self.base_sha,
                 "head_sha": self.head_sha,
-                "blocking": len(self.blocking),
-                "warnings": len(self.warnings),
+                "blocking": len(blocking),
+                "warnings": len(blocking),
                 "findings": [asdict(f) for f in self.findings],
             },
             indent=2,
