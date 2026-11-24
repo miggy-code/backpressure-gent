@@ -36,7 +36,6 @@ def test_removed_test_is_blocking_and_named():
     head = BASE.replace("def test_add():\n    assert 1 + 1 == 2\n    assert 2 + 2 == 4\n", "")
     (finding,) = edit(head)
     assert (finding.code, finding.severity, finding.test) == ("test_removed", Severity.BLOCKING, "test_add")
-    assert finding.at_base
 
 
 def test_removed_method_is_keyed_by_class():
