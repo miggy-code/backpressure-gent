@@ -108,10 +108,23 @@ def to_json(review: Review, verdict: Verdict, gate: list[GateFinding], run: RunI
     return json.dumps(data, indent=2)
 
 
+_CODE_SPAN = re.compile(r"(`+)(.+?)\1", re.DOTALL)
+
+
 def clean(text: str) -> str:
-    """Model text is untrusted: no raw HTML, and no @mentions that would notify people when posted."""
-    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return re.sub(r"@(?=[A-Za-z0-9-])", "@\u200b", text)
+    """Model text is untrusted: no raw HTML tags, and no @mentions that would notify people when posted.
+
+    Code spans are left as written: GitHub shows entities literally there and renders neither HTML nor mentions.
+    """
+    parts, pos = [], 0
+    for m in _CODE_SPAN.finditer(text):
+        parts += [_neutralise(text[pos : m.start()]), m.group(0)]
+        pos = m.end()
+    return "".join([*parts, _neutralise(text[pos:])])
+
+
+def _neutralise(text: str) -> str:
+    return re.sub(r"@(?=[A-Za-z0-9-])", "@\u200b", text.replace("<", "&lt;"))
 
 
 def _evidence_runs(review: Review, ledger: Ledger) -> list[str]:
