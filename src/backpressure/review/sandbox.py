@@ -8,6 +8,7 @@ host environment, a non-root user and resource limits. The reviewer's commands r
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 import threading
@@ -158,6 +159,11 @@ class Sandbox:
         if timed_out:
             output += f"\n[killed after {timeout}s timeout]"
         return RunResult(command, code, output, timed_out, round(seconds, 2))
+
+    def env(self) -> list[str]:
+        """The work container's environment as Docker sees it (KEY=value entries)."""
+        assert self._container, "sandbox is not running"
+        return json.loads(_docker("inspect", "-f", "{{json .Config.Env}}", self._container).stdout)
 
     def read_file(self, path: str) -> str:
         assert self._container, "sandbox is not running"

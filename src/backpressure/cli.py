@@ -28,9 +28,23 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--out", type=Path, help="Output folder (default .backpressure/review-<pr>-<sha7>/).")
     review.add_argument("--model", default="deepseek-v4-pro", choices=["deepseek-v4-pro", "deepseek-flash"])
     review.add_argument("--max-usd", default="1.00", help="Dollar cap the model proxy enforces (default 1.00).")
+    review.add_argument("--head-sha", help="Refuse to review unless the PR head is still this commit.")
+    gh_start = sub.add_parser("github-start", help="Workflow: check the requester, post the status comment.")
+    gh_finish = sub.add_parser("github-finish", help="Workflow: post the review and its label, remove the trigger label.")
+    for p in (gh_start, gh_finish):
+        p.add_argument("--repo", required=True)
+        p.add_argument("--pr", type=int, required=True)
+        p.add_argument("--run-url", required=True)
+    gh_start.add_argument("--requester", required=True)
+    gh_start.add_argument("--allow-forks", action="store_true")
+    gh_finish.add_argument("--dir", type=Path, help="The review job's output folder, if it produced one.")
+    gh_finish.add_argument("--comment-id", type=int, default=0)
+    gh_finish.add_argument("--head-sha", required=True)
     args = parser.parse_args(argv)
     if args.command == "review":
         return _review(args)
+    if args.command in ("github-start", "github-finish"):
+        return _github(args)
 
     if not args.base:
         print(
@@ -63,7 +77,7 @@ def _review(args: argparse.Namespace) -> int:
     from backpressure.review.schema import Verdict
 
     try:
-        outcome = review_pr(args.repo, args.pr, args.out, model=args.model, max_usd=args.max_usd)
+        outcome = review_pr(args.repo, args.pr, args.out, model=args.model, max_usd=args.max_usd, head_sha=args.head_sha)
     except (ReviewError, RuntimeError) as exc:
         print(f"backpressure: {exc}", file=sys.stderr)
         return 2
@@ -72,3 +86,23 @@ def _review(args: argparse.Namespace) -> int:
     if outcome.verdict is None:
         return 2
     return 0 if outcome.verdict is Verdict.APPROVE else 1
+
+
+def _github(args: argparse.Namespace) -> int:
+    from backpressure.review import github
+
+    api = github.GhCli()
+    if args.command == "github-start":
+        started = github.start(api, args.repo, args.pr, args.requester, args.run_url, allow_forks=args.allow_forks)
+        outputs = f"allowed={str(started.allowed).lower()}\nhead_sha={started.head_sha}\ncomment_id={started.comment_id}\n"
+        print(outputs, end="")
+        if out := os.environ.get("GITHUB_OUTPUT"):
+            with open(out, "a", encoding="utf-8") as fh:
+                fh.write(outputs)
+        if not started.allowed:
+            print(f"backpressure: not started: {started.reason}", file=sys.stderr)
+        return 0
+    folder = args.dir if args.dir and args.dir.is_dir() else None
+    verdict = github.finish(api, args.repo, args.pr, folder, args.comment_id, args.head_sha, args.run_url)
+    print(f"verdict={verdict.value if verdict else 'none'}")
+    return 0 if verdict else 1

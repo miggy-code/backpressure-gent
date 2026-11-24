@@ -60,7 +60,7 @@ uv run backpressure review --repo OWNER/REPO --pr 123            # prints the re
 uv run backpressure review --repo OWNER/REPO --pr 123 --max-usd 0.50
 ```
 
-Exit codes: 0 approve, 1 request changes or close, 2 error. Needs Docker, an authenticated `gh`, and `DEEPSEEK_API_KEY` (on macOS it falls back to the Keychain item `evaluation-lab` / `DEEPSEEK_API_KEY`). It does not post to GitHub yet.
+Exit codes: 0 approve, 1 request changes or close, 2 error. Needs Docker, an authenticated `gh`, and `DEEPSEEK_API_KEY` (on macOS it falls back to the Keychain item `evaluation-lab` / `DEEPSEEK_API_KEY`). Locally it only prints; posting happens in the workflow below.
 
 How it stays honest:
 - **Sandbox.** PR code runs only in Docker. A setup container installs the repo with network access but no host environment. The work container has no network, no host environment, a non-root user, memory, process and CPU limits, a 120 s limit per command and 1 MB of kept output.
@@ -70,6 +70,18 @@ How it stays honest:
 - **Rules from the base branch.** The reviewer applies the target repo's `REVIEW.md` as it is on the base branch, so a PR cannot loosen the rules it is judged by. Without one it uses a default set.
 
 The PR title, body and diff are given to the model as untrusted data. Code you review is sent to DeepSeek, so only review repos you may share with it.
+
+### On GitHub
+
+`.github/workflows/review.yml` runs the reviewer when someone with write access adds the `backpressure-review` label (or runs the workflow by hand with a PR number). It posts one review, pinned to the head commit, adds one label (`backpressure-approved`, `backpressure-request-changes` or `backpressure-close`), and removes the trigger label so you can add it again to retry. Each privilege gets its own job:
+
+| Job | Holds | Runs PR code |
+|---|---|---|
+| `start` | write token | no: checks the requester and that the PR is open, posts a status comment |
+| `review` | DeepSeek key, read-only token | only inside the Docker sandbox; stops if any secret reaches the sandbox environment, and its output files are checked for secrets before upload |
+| `post` | write token | no: posts the review and label from the review job's files |
+
+Every job checks out the base branch, so the workflow never runs the PR's own version of Backpressure. To set it up, create an environment named `review` that only the default branch may use, and store `DEEPSEEK_API_KEY` in it. Fork PRs are refused unless the repository variable `BACKPRESSURE_ALLOW_FORKS` is `true`. Model text is escaped before posting, so it cannot @mention people or inject HTML.
 
 ## Limits
 
@@ -81,8 +93,8 @@ The PR title, body and diff are given to the model as untrusted data. Code you r
 ## Roadmap
 
 1. Tamper gate.
-2. Investigating reviewer, local (this release).
-3. Reviewer on GitHub: label-triggered, posts one scorecard review (Fit, Checks, Tests, Tamper, Blocking, Risk, Depth) with a Verified / Not verified section. Code, not the model, turns the verdict into a label.
+2. Investigating reviewer, local.
+3. Reviewer on GitHub: label-triggered, one scorecard review and one verdict label (this release).
 4. Fork-safe reviewer through a GitHub App and a secretless sandbox; holdout scenarios the agent cannot see; slop delta.
 5. Published numbers: catch rate, false positives and cost on seeded and canary agent PRs.
 
