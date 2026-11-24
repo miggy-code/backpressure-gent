@@ -86,7 +86,7 @@ def test_posts_one_review_and_exactly_one_label(tmp_path: Path) -> None:
     (review,) = api.made("POST", "/pulls/1/reviews")
     assert (review["commit_id"], review["event"], review["body"]) == (HEAD, "COMMENT", "### Backpressure review\n")
     (inline,) = review["comments"]
-    assert inline["path"] == "app.py" and inline["line"] == 12 and "@​team &lt;b&gt;" in inline["body"]
+    assert inline["path"] == "app.py" and inline["line"] == 12 and "@​team &lt;b>" in inline["body"]
     assert api.made("POST", "/issues/1/labels") == [{"labels": ["backpressure-request-changes"]}]
     deleted = {p.rsplit("/", 1)[1] for m, p, _ in api.calls if m == "DELETE"}
     assert deleted == {"backpressure-approved", "backpressure-close", TRIGGER}
@@ -124,7 +124,13 @@ def test_review_for_another_head_is_not_posted(tmp_path: Path) -> None:
 
 
 def test_clean_neutralises_mentions_and_html() -> None:
-    assert clean("ping @octocat <script>x</script> a@b.c") == "ping @​octocat &lt;script&gt;x&lt;/script&gt; a@​b.c"
+    assert clean("ping @octocat <script>x</script> a@b.c") == "ping @​octocat &lt;script>x&lt;/script> a@​b.c"
+
+
+def test_clean_leaves_code_spans_as_written() -> None:
+    # GitHub shows entities literally inside code spans, and neither renders HTML nor notifies mentions there.
+    text = "Replaced `if len(x) > 50 and y < 3:` with ``a`b @me`` then <b>@you</b>"
+    assert clean(text) == "Replaced `if len(x) > 50 and y < 3:` with ``a`b @me`` then &lt;b>@​you&lt;/b>"
 
 
 def test_failure_note_from_the_review_job_is_escaped(tmp_path: Path) -> None:
