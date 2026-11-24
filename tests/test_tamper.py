@@ -1,5 +1,7 @@
 from textwrap import dedent
 
+import pytest
+
 from backpressure.report import Severity
 from backpressure.tamper import FileChange, analyze, is_test_file
 
@@ -44,14 +46,16 @@ def test_removed_method_is_keyed_by_class():
     assert [f.test for f in edit(head)] == ["TestThing.test_name"]
 
 
-def test_skip_decorator_added():
-    head = BASE.replace("def test_add", "@pytest.mark.skip(reason='flaky')\ndef test_add")
-    assert codes(edit(head)) == ["skip_added"]
-
-
-def test_skip_call_in_body_added():
-    head = BASE.replace("    assert 1 + 1 == 2\n", "    pytest.skip('later')\n    assert 1 + 1 == 2\n")
-    assert codes(edit(head)) == ["skip_added"]
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("def test_add", "@pytest.mark.skip(reason='flaky')\ndef test_add"),
+        ("    assert 1 + 1 == 2\n", "    pytest.skip('later')\n    assert 1 + 1 == 2\n"),
+    ],
+    ids=["decorator", "call_in_body"],
+)
+def test_skip_added(old, new):
+    assert codes(edit(BASE.replace(old, new))) == ["skip_added"]
 
 
 def test_class_level_unittest_skip_applies_to_its_tests():
