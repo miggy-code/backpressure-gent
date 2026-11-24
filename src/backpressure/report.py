@@ -28,6 +28,7 @@ class Report:
     base_sha: str
     head_sha: str
     findings: list[Finding] = field(default_factory=list)
+    overridden: bool = False  # a maintainer accepted the findings with the backpressure-override label
 
     @property
     def blocking(self) -> list[Finding]:
@@ -39,7 +40,9 @@ class Report:
 
     @property
     def verdict(self) -> str:
-        return "fail" if self.blocking else "pass"
+        if not self.blocking:
+            return "pass"
+        return "overridden" if self.overridden else "fail"
 
     def to_json(self) -> str:
         return json.dumps(
@@ -55,8 +58,7 @@ class Report:
         )
 
     def to_markdown(self, repo_url: str | None = None) -> str:
-        mark = "❌" if self.blocking else "✅"
-        word = "Fail" if self.blocking else "Pass"
+        mark, word = {"pass": ("✅", "Pass"), "fail": ("❌", "Fail"), "overridden": ("⚠️", "Overridden")}[self.verdict]
         lines = [
             f"## {mark} Backpressure tamper gate: {word}",
             "",
@@ -64,6 +66,9 @@ class Report:
             "|---|---|---|",
             f"| {mark} {word} | {_cell(len(self.blocking), '❌')} | {_cell(len(self.warnings), '⚠️')} |",
         ]
+        if self.verdict == "overridden":
+            note = "A maintainer added the `backpressure-override` label: findings are kept for the record and do not fail the gate."
+            lines += ["", note]
         if self.findings:
             lines += ["", "**Needs attention**", ""]
             for f in self.blocking + self.warnings:

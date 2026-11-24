@@ -2,6 +2,9 @@ name: Backpressure gate
 # Dogfood: run this repo's own action on its pull requests. Needs no secrets, so it is safe on forks.
 on:
   pull_request:
+    # labeled/unlabeled: adding or removing backpressure-override re-runs the gate. Every label event runs it:
+    # skipping the job on other labels would report a skipped (passing) check over a failing one.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 permissions:
   contents: read
 jobs:

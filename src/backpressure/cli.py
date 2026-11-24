@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     tamper.add_argument("--json", type=Path, help="Write the JSON report here.")
     tamper.add_argument("--repo-url", help="https://github.com/owner/repo, to link findings to lines.")
     tamper.add_argument("--fail-on", choices=["blocking", "never"], default="blocking")
+    tamper.add_argument("--override", action="store_true", help="Report findings but pass (the backpressure-override label).")
     tamper.add_argument("-C", dest="cwd", default=None, help="Run in this git checkout.")
     review = sub.add_parser("review", help="Investigate one pull request with the DeepSeek reviewer (local; does not post).")
     review.add_argument("--repo", required=True, help="OWNER/REPO on GitHub.")
@@ -56,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         head_sha = gitdiff.rev_parse(args.head, args.cwd)
         base_sha = gitdiff.merge_base(gitdiff.rev_parse(args.base, args.cwd), head_sha, args.cwd)
-        report = Report(base_sha, head_sha, analyze(gitdiff.changes(base_sha, head_sha, args.cwd)))
+        report = Report(base_sha, head_sha, analyze(gitdiff.changes(base_sha, head_sha, args.cwd)), overridden=args.override)
     except gitdiff.GitError as exc:
         print(f"backpressure: {exc}. If the ref exists, check out with fetch-depth: 0 so history is available.", file=sys.stderr)
         return 2
