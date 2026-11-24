@@ -1,0 +1,48 @@
+name: Backpressure tamper gate
+description: Fail a pull request that makes its Python tests easier to pass (deleted tests, new skips, fewer assertions, edited test config).
+author: miggy-code
+branding:
+  icon: shield
+  color: orange
+inputs:
+  base:
+    description: Base commit or ref. Defaults to the pull request's base SHA. The checkout needs full history (fetch-depth 0).
+    required: false
+    default: ""
+  head:
+    description: Head commit or ref.
+    required: false
+    default: HEAD
+  fail-on:
+    description: "blocking (fail the step on blocking findings) or never (report only)."
+    required: false
+    default: blocking
+outputs:
+  verdict:
+    description: pass or fail.
+    value: ${{ steps.gate.outputs.verdict }}
+  report:
+    description: Path to the JSON report.
+    value: ${{ steps.gate.outputs.report }}
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+    - id: gate
+      shell: bash
+      env:
+        BP_BASE: ${{ inputs.base || github.event.pull_request.base.sha }}
+        BP_HEAD: ${{ inputs.head }}
+        BP_FAIL_ON: ${{ inputs.fail-on }}
+        BP_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+      run: |
+        report="$RUNNER_TEMP/backpressure-tamper.json"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+        status=0
+        uv run --quiet --no-dev --project "$GITHUB_ACTION_PATH" backpressure tamper \
+          --base "$BP_BASE" --head "$BP_HEAD" --fail-on "$BP_FAIL_ON" \
+          --repo-url "$BP_REPO_URL" --json "$report" || status=$?
+        if [ -f "$report" ]; then
+          echo "verdict=$(jq -r .verdict "$report")" >> "$GITHUB_OUTPUT"
+        fi
+        exit $status
