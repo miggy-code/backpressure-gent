@@ -6,6 +6,8 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 
+MAX_LISTED = 50  # job summaries over ~1 MB are rejected; a huge PR should not hide the verdict
+
 
 class Severity(StrEnum):
     BLOCKING = "blocking"
@@ -66,7 +68,12 @@ class Report:
         ]
         if self.findings:
             lines += ["", "**Needs attention**", ""]
-            for f in self.blocking + self.warnings:
+            ordered = self.blocking + self.warnings
+            if len(ordered) > MAX_LISTED:
+                hidden = len(ordered) - MAX_LISTED
+                ordered = ordered[:MAX_LISTED]
+                lines.append(f"_Showing the first {MAX_LISTED}; {hidden} more are in the JSON report._")
+            for f in ordered:
                 icon = "❌" if f.severity is Severity.BLOCKING else "⚠️"
                 where = f"`{f.path}`" + (f" `{f.test}`" if f.test else "")
                 if repo_url:
