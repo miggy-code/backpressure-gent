@@ -107,7 +107,13 @@ def analyze(changes: list[FileChange]) -> list[Finding]:
                 if not deleted:
                     findings.append(
                         Finding(
-                            "test_removed", Severity.BLOCKING, path, "Test exists at the merge base and is gone at head.", name, before.line
+                            "test_removed",
+                            Severity.BLOCKING,
+                            path,
+                            "Test exists at the merge base and is gone at head.",
+                            name,
+                            before.line,
+                            at_base=True,
                         )
                     )
                 continue
@@ -120,6 +126,7 @@ def analyze(changes: list[FileChange]) -> list[Finding]:
                     path,
                     f"Test file deleted; {len(missing)} of its {len(tests)} tests do not reappear elsewhere: {', '.join(missing[:5])}"
                     + (" ..." if len(missing) > 5 else ""),
+                    at_base=True,
                 )
             )
     return findings

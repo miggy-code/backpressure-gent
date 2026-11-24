@@ -20,6 +20,7 @@ class Finding:
     message: str
     test: str | None = None
     line: int | None = None
+    at_base: bool = False  # the line exists only at the merge base (removed tests)
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,8 @@ class Report:
                 where = f"`{f.path}`" + (f" `{f.test}`" if f.test else "")
                 if repo_url:
                     anchor = f"#L{f.line}" if f.line else ""
-                    where = f"[{where}]({repo_url}/blob/{self.head_sha}/{f.path}{anchor})"
+                    sha = self.base_sha if f.at_base else self.head_sha
+                    where = f"[{where}]({repo_url}/blob/{sha}/{f.path}{anchor})"
                 lines.append(f"- {icon} **{f.code}** {where}: {f.message}")
         lines += [
             "",

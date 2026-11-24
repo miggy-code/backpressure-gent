@@ -10,9 +10,9 @@ inputs:
     required: false
     default: ""
   head:
-    description: Head commit or ref.
+    description: Head commit or ref. Defaults to the pull request's head SHA (not GitHub's temporary merge commit), else HEAD.
     required: false
-    default: HEAD
+    default: ""
   fail-on:
     description: "blocking (fail the step on blocking findings) or never (report only)."
     required: false
@@ -32,7 +32,7 @@ runs:
       shell: bash
       env:
         BP_BASE: ${{ inputs.base || github.event.pull_request.base.sha }}
-        BP_HEAD: ${{ inputs.head }}
+        BP_HEAD: ${{ inputs.head || github.event.pull_request.head.sha || 'HEAD' }}
         BP_FAIL_ON: ${{ inputs.fail-on }}
         BP_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
       run: |
