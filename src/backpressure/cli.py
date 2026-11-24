@@ -1,4 +1,4 @@
-"""Command line: `backpressure tamper --base REF --head REF`."""
+"""Command line: `backpressure tamper --base REF` and `backpressure review --repo OWNER/REPO --pr N`."""
 
 from __future__ import annotations
 
@@ -22,7 +22,15 @@ def main(argv: list[str] | None = None) -> int:
     tamper.add_argument("--repo-url", help="https://github.com/owner/repo, to link findings to lines.")
     tamper.add_argument("--fail-on", choices=["blocking", "never"], default="blocking")
     tamper.add_argument("-C", dest="cwd", default=None, help="Run in this git checkout.")
+    review = sub.add_parser("review", help="Investigate one pull request with the DeepSeek reviewer (local; does not post).")
+    review.add_argument("--repo", required=True, help="OWNER/REPO on GitHub.")
+    review.add_argument("--pr", type=int, required=True, help="Pull request number.")
+    review.add_argument("--out", type=Path, help="Output folder (default .backpressure/review-<pr>-<sha7>/).")
+    review.add_argument("--model", default="deepseek-v4-pro", choices=["deepseek-v4-pro", "deepseek-flash"])
+    review.add_argument("--max-usd", default="1.00", help="Dollar cap the model proxy enforces (default 1.00).")
     args = parser.parse_args(argv)
+    if args.command == "review":
+        return _review(args)
 
     if not args.base:
         print(
@@ -47,3 +55,20 @@ def main(argv: list[str] | None = None) -> int:
         with open(summary, "a", encoding="utf-8") as fh:
             fh.write(markdown)
     return 1 if report.verdict == "fail" and args.fail_on == "blocking" else 0
+
+
+def _review(args: argparse.Namespace) -> int:
+    # Imported here so the gate never loads the reviewer's dependencies.
+    from backpressure.review.pipeline import ReviewError, review_pr
+    from backpressure.review.schema import Verdict
+
+    try:
+        outcome = review_pr(args.repo, args.pr, args.out, model=args.model, max_usd=args.max_usd)
+    except (ReviewError, RuntimeError) as exc:
+        print(f"backpressure: {exc}", file=sys.stderr)
+        return 2
+    print(outcome.markdown)
+    print(f"Review files: {outcome.out_dir}", file=sys.stderr)
+    if outcome.verdict is None:
+        return 2
+    return 0 if outcome.verdict is Verdict.APPROVE else 1
