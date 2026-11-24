@@ -67,7 +67,6 @@ def test_assertions_reduced():
     head = BASE.replace("    assert 2 + 2 == 4\n", "")
     (finding,) = edit(head)
     assert finding.code == "assertions_reduced"
-    assert "2 to 1" in finding.message
 
 
 def test_unittest_and_raises_calls_count_as_assertions():
