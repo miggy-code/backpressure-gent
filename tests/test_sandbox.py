@@ -54,3 +54,16 @@ def test_reads_files_from_the_container(sandbox: Sandbox) -> None:
     assert "def test_ok" in sandbox.read_file("test_ok.py")
     with pytest.raises(FileNotFoundError):
         sandbox.read_file("missing.py")
+
+
+def test_flooded_output_is_capped_without_buffering_it(sandbox: Sandbox) -> None:
+    import resource
+    import sys
+
+    scale = 1 if sys.platform == "darwin" else 1024  # ru_maxrss is bytes on macOS, KiB on Linux
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale
+    result = sandbox.exec("head -c 300000000 /dev/zero; echo done", timeout=60)
+    grown_mb = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale - before) / 1_000_000
+    assert "[output cut at" in result.output
+    assert len(result.output) < 1_100_000
+    assert grown_mb < 100

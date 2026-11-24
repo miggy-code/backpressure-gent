@@ -35,8 +35,8 @@ class PullRequest:
 
 def load(repo: str, number: int) -> PullRequest:
     fields = "number,title,body,url,state,baseRefOid,headRefOid,files"
-    data = json.loads(_run(["gh", "pr", "view", str(number), "--repo", repo, "--json", fields]))
-    diff = _run(["gh", "pr", "diff", str(number), "--repo", repo])
+    data = json.loads(_run(["gh", "pr", "view", str(number), "--repo", repo, "--json", fields], "gh pr view"))
+    diff = _run(["gh", "pr", "diff", str(number), "--repo", repo], "gh pr diff")
     return PullRequest(
         repo=repo,
         number=int(data["number"]),
@@ -53,13 +53,13 @@ def load(repo: str, number: int) -> PullRequest:
 
 def checkout(pr: PullRequest, dest: Path) -> None:
     """Clone the repo into `dest` and detach at the PR's head SHA (fork PRs come via pull/N/head)."""
-    _run(["git", *_GH_AUTH, "clone", "--quiet", f"{pr.repo_url}.git", str(dest)])
-    _run(["git", *_GH_AUTH, "-C", str(dest), "fetch", "--quiet", "origin", f"pull/{pr.number}/head", pr.base_sha])
-    _run(["git", "-C", str(dest), "-c", "advice.detachedHead=false", "checkout", "--quiet", pr.head_sha])
+    _run(["git", *_GH_AUTH, "clone", "--quiet", f"{pr.repo_url}.git", str(dest)], "git clone")
+    _run(["git", *_GH_AUTH, "-C", str(dest), "fetch", "--quiet", "origin", f"pull/{pr.number}/head", pr.base_sha], "git fetch")
+    _run(["git", "-C", str(dest), "-c", "advice.detachedHead=false", "checkout", "--quiet", pr.head_sha], "git checkout")
 
 
-def _run(argv: list[str]) -> str:
+def _run(argv: list[str], what: str) -> str:
     proc = subprocess.run(argv, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
-        raise PullRequestError(f"{argv[0]} {argv[1] if argv[1] != '-c' else ''} failed: {proc.stderr.strip()[-1500:]}")
+        raise PullRequestError(f"{what} failed: {proc.stderr.strip()[-1500:]}")
     return proc.stdout

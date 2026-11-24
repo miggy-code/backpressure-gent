@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -53,6 +54,8 @@ WORK_ENV = {
 }
 LIMITS = ["--network", "none", "--user", "1000:1000", "--memory", "2g", "--pids-limit", "256", "--cpus", "2",
           "--cap-drop", "ALL", "--security-opt", "no-new-privileges"]  # fmt: skip
+# Setup has network (to install) and runs the repo's build code as root, so it still gets limits.
+SETUP_LIMITS = ["--memory", "4g", "--pids-limit", "512", "--cpus", "2", "--security-opt", "no-new-privileges"]
 MAX_CAPTURE = 1_000_000  # bytes of output kept per run; beyond this the command is noise
 
 
@@ -92,7 +95,7 @@ class Sandbox:
         try:
             base = _base_image()
             setup = f"backpressure-setup-{self._id}"
-            _docker("create", "--name", setup, "-w", "/work", base, "sh", "-c", INSTALL)
+            _docker("create", "--name", setup, *SETUP_LIMITS, "-w", "/work", base, "sh", "-c", INSTALL)
             try:
                 _docker("cp", f"{self._checkout}/.", f"{setup}:/work")
                 proc = _docker("start", "-a", setup, check=False, timeout=self._setup_timeout)
@@ -125,15 +128,32 @@ class Sandbox:
         # `timeout` signals the whole process group inside the container; the host-side timeout
         # is only a backstop if docker itself hangs.
         argv = ["docker", "exec", self._container, "timeout", "-k", "5", str(timeout), "sh", "-c", command]
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        kept = bytearray()
+        total = 0
+
+        def drain() -> None:
+            # Keep the first MAX_CAPTURE bytes and discard the rest, so a flood cannot exhaust host memory.
+            nonlocal total
+            assert proc.stdout is not None
+            while chunk := proc.stdout.read(65536):
+                total += len(chunk)
+                if len(kept) < MAX_CAPTURE:
+                    kept.extend(chunk[: MAX_CAPTURE - len(kept)])
+
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
         try:
-            proc = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout + 30)
-            code, raw = proc.returncode, proc.stdout
-        except subprocess.TimeoutExpired as exc:
-            code, raw = 124, exc.stdout or b""
+            code = proc.wait(timeout=timeout + 30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            code = proc.wait()
+            code = 124
+        reader.join(timeout=10)
         seconds = time.monotonic() - start
-        output = raw[:MAX_CAPTURE].decode("utf-8", errors="replace")
-        if len(raw) > MAX_CAPTURE:
-            output += f"\n[output cut at {MAX_CAPTURE} bytes]"
+        output = bytes(kept).decode("utf-8", errors="replace")
+        if total > MAX_CAPTURE:
+            output += f"\n[output cut at {MAX_CAPTURE} of {total} bytes]"
         timed_out = code in (124, 137) and seconds >= timeout
         if timed_out:
             output += f"\n[killed after {timeout}s timeout]"
