@@ -99,3 +99,10 @@ def test_missing_base_explains_the_fix(repo, monkeypatch, capsys):
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     assert main(["tamper", "--base", "", "-C", str(repo)]) == 2
     assert "fetch-depth: 0" in capsys.readouterr().err
+
+
+def test_json_report_creates_missing_folders(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    out = tmp_path / "reports" / "gate" / "report.json"
+    assert main(["tamper", "--base", "main", "-C", str(repo), "--json", str(out)]) == 0
+    assert json.loads(out.read_text())["verdict"] == "pass"
