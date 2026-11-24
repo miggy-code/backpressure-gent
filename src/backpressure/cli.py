@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     tamper.add_argument("--json", type=Path, help="Write the JSON report here.")
     tamper.add_argument("--repo-url", help="https://github.com/owner/repo, to link findings to lines.")
     tamper.add_argument("--fail-on", choices=["blocking", "never"], default="blocking")
+    tamper.add_argument("--override", action="store_true", help="Report findings but pass (the backpressure-override label).")
     tamper.add_argument("-C", dest="cwd", default=None, help="Run in this git checkout.")
     review = sub.add_parser("review", help="Investigate one pull request with the DeepSeek reviewer (local; does not post).")
     review.add_argument("--repo", required=True, help="OWNER/REPO on GitHub.")
@@ -29,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--model", default="deepseek-v4-pro", choices=["deepseek-v4-pro", "deepseek-flash"])
     review.add_argument("--max-usd", default="1.00", help="Dollar cap the model proxy enforces (default 1.00).")
     review.add_argument("--head-sha", help="Refuse to review unless the PR head is still this commit.")
+    review.add_argument("--holdouts", type=Path, help="Folder of private holdout tests, laid out as OWNER/REPO/test_*.py.")
     gh_start = sub.add_parser("github-start", help="Workflow: check the requester, post the status comment.")
     gh_finish = sub.add_parser("github-finish", help="Workflow: post the review and its label, remove the trigger label.")
     for p in (gh_start, gh_finish):
@@ -56,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         head_sha = gitdiff.rev_parse(args.head, args.cwd)
         base_sha = gitdiff.merge_base(gitdiff.rev_parse(args.base, args.cwd), head_sha, args.cwd)
-        report = Report(base_sha, head_sha, analyze(gitdiff.changes(base_sha, head_sha, args.cwd)))
+        report = Report(base_sha, head_sha, analyze(gitdiff.changes(base_sha, head_sha, args.cwd)), overridden=args.override)
     except gitdiff.GitError as exc:
         print(f"backpressure: {exc}. If the ref exists, check out with fetch-depth: 0 so history is available.", file=sys.stderr)
         return 2
@@ -78,7 +80,15 @@ def _review(args: argparse.Namespace) -> int:
     from backpressure.review.schema import Verdict
 
     try:
-        outcome = review_pr(args.repo, args.pr, args.out, model=args.model, max_usd=args.max_usd, head_sha=args.head_sha)
+        outcome = review_pr(
+            args.repo,
+            args.pr,
+            args.out,
+            model=args.model,
+            max_usd=args.max_usd,
+            head_sha=args.head_sha,
+            holdouts_root=args.holdouts,
+        )
     except (ReviewError, RuntimeError) as exc:
         print(f"backpressure: {exc}", file=sys.stderr)
         return 2

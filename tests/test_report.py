@@ -21,3 +21,17 @@ def test_clean_report_shows_pass_and_no_attention_list():
     md = Report(BASE, HEAD).to_markdown()
     assert "✅ Backpressure tamper gate: Pass" in md
     assert "Needs attention" not in md
+
+
+def test_override_keeps_findings_but_passes_with_a_note():
+    finding = Finding("test_removed", Severity.BLOCKING, "tests/t.py", "gone", "test_a", 5, at_base=True)
+    report = Report("b" * 40, "h" * 40, [finding], overridden=True)
+    assert report.verdict == "overridden"
+    md = report.to_markdown()
+    assert "⚠️ Backpressure tamper gate: Overridden" in md
+    assert "**test_removed**" in md and "backpressure-override" in md
+    assert '"verdict": "overridden"' in report.to_json()
+
+
+def test_override_on_a_clean_report_is_just_a_pass():
+    assert Report("b" * 40, "h" * 40, [], overridden=True).verdict == "pass"

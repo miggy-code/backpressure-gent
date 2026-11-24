@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from backpressure.report import Finding as GateFinding
+from backpressure.review.holdouts import HoldoutResult
 from backpressure.review.model import Usage
 from backpressure.review.schema import Review, Verdict, unresolved_tamper
 from backpressure.review.tools import Ledger
@@ -27,7 +28,14 @@ class RunInfo:
     spent_usd: str | None = None
 
 
-def to_markdown(review: Review, verdict: Verdict, gate: list[GateFinding], run: RunInfo, ledger: Ledger | None = None) -> str:
+def to_markdown(
+    review: Review,
+    verdict: Verdict,
+    gate: list[GateFinding],
+    run: RunInfo,
+    ledger: Ledger | None = None,
+    holdouts: HoldoutResult | None = None,
+) -> str:
     card = review.scorecard
     unresolved = unresolved_tamper(review, gate)
     blocking = [f for f in review.findings if f.blocking]
@@ -37,6 +45,7 @@ def to_markdown(review: Review, verdict: Verdict, gate: list[GateFinding], run: 
         ("Checks", {"pass": OK, "not_run": WARN, "fail": BAD}[card.checks], card.checks.replace("_", " ")),
         ("Tests", {"pass": OK, "not_needed": OK, "fail": BAD}[card.tests], card.tests.replace("_", " ")),
         ("Tamper", BAD if unresolved else WARN if gate else OK, _tamper_cell(len(unresolved), len(gate))),
+        ("Holdouts", *_holdout_cell(holdouts)),
         ("Blocking", BAD if blocking else OK, str(len(blocking))),
         ("Non-blocking", WARN if minor else OK, str(len(minor))),
         ("Risk", WARN if card.risk in ("medium", "high") else OK, card.risk),
@@ -54,6 +63,13 @@ def to_markdown(review: Review, verdict: Verdict, gate: list[GateFinding], run: 
     attention = []
     if review.close:
         attention.append(f"- {BAD} **Close ({review.close.reason})**: {clean(review.close.explanation)} {_cite(review.close.evidence)}")
+    if holdouts and holdouts.regressed:
+        n = holdouts.regressed
+        attention.append(
+            f"- {BAD} **Holdouts**: {n} holdout scenario{'s' if n > 1 else ''} that pass{'' if n > 1 else 'es'} at the merge base "
+            f"fail{'' if n > 1 else 's'} at head. Holdouts are private so they cannot be gamed; a maintainer can rerun the "
+            "review locally with `--holdouts` to see which."
+        )
     for f in blocking:
         attention.append(f"- {BAD} **{clean(f.title)}** ({_where(f.path, f.line, run)}): {clean(_one_line(f.body))} {_cite(f.evidence)}")
     for g in unresolved:
@@ -96,13 +112,14 @@ def to_markdown(review: Review, verdict: Verdict, gate: list[GateFinding], run: 
     return "\n".join(lines)
 
 
-def to_json(review: Review, verdict: Verdict, gate: list[GateFinding], run: RunInfo) -> str:
+def to_json(review: Review, verdict: Verdict, gate: list[GateFinding], run: RunInfo, holdouts: HoldoutResult | None = None) -> str:
     data: dict[str, Any] = {
         "verdict": verdict.value,
         "head_sha": run.head_sha,
         "review": asdict(review),
         "gate": [asdict(g) for g in gate],
         "unresolved_tamper": [asdict(g) for g in unresolved_tamper(review, gate)],
+        "holdouts": holdouts.counts() if holdouts else None,  # counts only, never names
         "run": {**asdict(run), "usage": asdict(run.usage)},
     }
     return json.dumps(data, indent=2)
@@ -142,6 +159,18 @@ def _evidence_runs(review: Review, ledger: Ledger) -> list[str]:
         shown = first[:120] + (" …" if rest or len(first) > 120 else "")
         lines.append(f"- `{run_id}` exit {entry.exit_code}: `{shown.replace('`', "'")}`")
     return lines
+
+
+def _holdout_cell(holdouts: HoldoutResult | None) -> tuple[str, str]:
+    if holdouts is None:
+        return OK, "none"
+    if not holdouts.ran:
+        return WARN, "not run"
+    if holdouts.regressed:
+        return BAD, f"{holdouts.regressed} regressed"
+    if holdouts.still_failing:
+        return WARN, f"{holdouts.still_failing} failing"
+    return OK, f"{holdouts.total} pass"
 
 
 def _tamper_cell(unresolved: int, total: int) -> str:

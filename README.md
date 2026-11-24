@@ -83,20 +83,30 @@ The PR title, body and diff are given to the model as untrusted data. Code you r
 
 Every job checks out the base branch, so the workflow never runs the PR's own version of Backpressure. To set it up, create an environment named `review` that only the default branch may use, and store `DEEPSEEK_API_KEY` in it. Fork PRs are refused unless the repository variable `BACKPRESSURE_ALLOW_FORKS` is `true`. Model text is escaped before posting, so it cannot @mention people or inject HTML.
 
+### Holdout scenarios
+
+Holdouts are tests the coding agent never sees: they live in a separate private repo (`OWNER/REPO/test_*.py`), not in the repo under review. Code, not the model, runs them in their own container against the merge base and the head, and a holdout that passes at the base and fails at the head blocks the PR (Holdouts ❌ on the scorecard). The model's container never mounts them, and reviews show counts only, so a public review cannot leak a holdout back to the agent. Locally: `backpressure review ... --holdouts DIR`. In the workflow: a read-only deploy key for the holdouts repo in the `review` environment as `HOLDOUTS_DEPLOY_KEY` (repo name from the variable `BACKPRESSURE_HOLDOUTS_REPO`); without it, reviews run without holdouts.
+
+### Overriding the gate
+
+When a finding is an honest refactor (for example a test folded into `@pytest.mark.parametrize`), a maintainer adds the `backpressure-override` label. The gate re-runs, lists every finding marked as overridden, and passes. Anyone who can add labels can override, so protect the label like a merge decision. The reviewer ignores the label: it still adjudicates each finding.
+
 ## Limits
 
 - Python and pytest/unittest conventions only (`test_*.py`, `*_test.py`, functions and methods named `test*`).
 - Assertion counts are syntactic. Weakening an assertion while keeping its count (`==` to `!=`, a looser `pytest.approx`) is not caught yet.
-- Honest refactors can trip it: merging tests into one `@pytest.mark.parametrize` test reports the originals as removed, and moving assertions into a helper reports fewer assertions. There is no per-PR override yet; use `fail-on: never` to report only, or review and merge with an admin bypass. An override arrives with the reviewer.
+- Honest refactors can trip it: merging tests into one `@pytest.mark.parametrize` test reports the originals as removed, and moving assertions into a helper reports fewer assertions. A maintainer accepts those with the `backpressure-override` label (above).
+- Holdouts run in the same interpreter as the PR's code. Plugin autoloading and `sitecustomize` are closed off, but a PR that adds start-up code through its dependencies (`.pth` files) could still rig the run; that change is visible in the diff for the reviewer.
 - A PR that edits the workflow or `CODEOWNERS` can still switch the gate off. Protect `.github/` with CODEOWNERS and a ruleset. In this repository the dogfood workflow uses `./`, so it runs the PR's own copy of the action.
 
 ## Roadmap
 
 1. Tamper gate.
 2. Investigating reviewer, local.
-3. Reviewer on GitHub: label-triggered, one scorecard review and one verdict label (this release).
-4. Fork-safe reviewer through a GitHub App and a secretless sandbox; holdout scenarios the agent cannot see; slop delta.
+3. Reviewer on GitHub: label-triggered, one scorecard review and one verdict label.
+4. Holdout scenarios and the gate override label; fork PR reviews (this release).
 5. Published numbers: catch rate, false positives and cost on seeded and canary agent PRs.
+6. Reviewer depth: GitHub App identity, parallel investigators, differential and edge-case probes, slop delta.
 
 The reviewer design follows the Arize openinference factory's review lane.
 

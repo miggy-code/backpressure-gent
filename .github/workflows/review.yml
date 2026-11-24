@@ -73,6 +73,21 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - name: Fetch holdouts
+        # Private tests the PR author cannot see, read with a read-only deploy key. Skipped when not configured.
+        env:
+          DEPLOY_KEY: ${{ secrets.HOLDOUTS_DEPLOY_KEY }}
+          HOLDOUTS_REPO: ${{ vars.BACKPRESSURE_HOLDOUTS_REPO || 'miggy-code/backpressure-holdouts' }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then echo "No HOLDOUTS_DEPLOY_KEY; reviewing without holdouts."; exit 0; fi
+          key="$RUNNER_TEMP/holdouts_key"; hosts="$RUNNER_TEMP/known_hosts"
+          (umask 077; printf '%s\n' "$DEPLOY_KEY" > "$key")
+          curl -fsSL https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com " + .' > "$hosts"
+          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$hosts" \
+            git clone --quiet --depth 1 "git@github.com:$HOLDOUTS_REPO.git" "$RUNNER_TEMP/holdouts"
+          rm -f "$key"
+          rm -rf "$RUNNER_TEMP/holdouts/.git"
+          echo "HOLDOUTS_DIR=$RUNNER_TEMP/holdouts" >> "$GITHUB_ENV"
       - name: Review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,13 +95,18 @@ jobs:
           HEAD_SHA: ${{ needs.start.outputs.head_sha }}
         run: |
           set +e
-          uv run --frozen --no-dev backpressure review --repo "$GITHUB_REPOSITORY" --pr "$PR" --head-sha "$HEAD_SHA" --out out
+          holdouts=()
+          if [ -n "${HOLDOUTS_DIR:-}" ]; then holdouts=(--holdouts "$HOLDOUTS_DIR"); fi
+          uv run --frozen --no-dev backpressure review --repo "$GITHUB_REPOSITORY" --pr "$PR" --head-sha "$HEAD_SHA" --out out "${holdouts[@]}"
           code=$?
           echo "Review exit code: $code (0 approve, 1 request changes or close, 2 error)"
           test "$code" -le 1
       - name: Show the sandbox environment
         if: always()
         run: test -f out/sandbox-env.json && cat out/sandbox-env.json || echo "no sandbox was started"
+      - name: Keep holdout names out of the artifact
+        if: always()
+        run: rm -f out/holdouts.json
       - name: Check the review files hold no secrets
         if: always()
         env:

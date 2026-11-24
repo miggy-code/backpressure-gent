@@ -9,6 +9,7 @@ from enum import StrEnum
 from typing import Any
 
 from backpressure.report import Finding as GateFinding
+from backpressure.review.holdouts import HoldoutResult
 from backpressure.review.tools import Ledger
 
 MIN_EXCERPT = 10
@@ -257,10 +258,12 @@ def parse_and_validate(raw: Any, ledger: Ledger, diff: DiffIndex, gate: list[Gat
     ), []
 
 
-def verdict(review: Review, gate: list[GateFinding]) -> Verdict:
+def verdict(review: Review, gate: list[GateFinding], holdouts: HoldoutResult | None = None) -> Verdict:
     """First match wins. `checks: not_run` does not block; it shows as a warning on the scorecard."""
     if review.close is not None:
         return Verdict.CLOSE
+    if holdouts is not None and holdouts.regressed:
+        return Verdict.REQUEST_CHANGES
     card = review.scorecard
     if card.fit in ("partial", "fail") or card.checks == "fail" or card.tests == "fail":
         return Verdict.REQUEST_CHANGES

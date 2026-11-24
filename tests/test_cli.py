@@ -106,3 +106,16 @@ def test_json_report_creates_missing_folders(repo: Path, tmp_path: Path, monkeyp
     out = tmp_path / "reports" / "gate" / "report.json"
     assert main(["tamper", "--base", "main", "-C", str(repo), "--json", str(out)]) == 0
     assert json.loads(out.read_text())["verdict"] == "pass"
+
+
+def test_override_reports_findings_and_exits_zero(repo, tmp_path, monkeypatch):
+    commit(repo, {"tests/test_x.py": None})
+    code, report = run_with(repo, tmp_path, monkeypatch, "--override")
+    assert (code, report["verdict"], report["findings"][0]["code"]) == (0, "overridden", "test_file_deleted")
+
+
+def run_with(repo, tmp_path, monkeypatch, *extra):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    out = tmp_path / "report.json"
+    code = main(["tamper", "--base", "main", "-C", str(repo), "--json", str(out), *extra])
+    return code, json.loads(out.read_text())

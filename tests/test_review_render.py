@@ -25,7 +25,7 @@ def make(**kw) -> Review:  # type: ignore[no-untyped-def]
 def test_clean_review_has_scorecard_and_collapsed_details_only() -> None:
     md = to_markdown(make(), Verdict.APPROVE, [], RUN)
     assert md.startswith("### Backpressure review: ✅ Approve")
-    assert "| Fit | Checks | Tests | Tamper | Blocking | Non-blocking | Risk | Depth |" in md
+    assert "| Fit | Checks | Tests | Tamper | Holdouts | Blocking | Non-blocking | Risk | Depth |" in md
     assert "Needs attention" not in md
     assert "- tests pass (`r1`)" in md and "- Windows paths" in md
     assert "$0.0123" in md and "head abc1234" in md

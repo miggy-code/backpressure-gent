@@ -17,9 +17,13 @@ inputs:
     description: "blocking (fail the step on blocking findings) or never (report only)."
     required: false
     default: blocking
+  override:
+    description: "true to report findings without failing. Defaults to true when the pull request has the backpressure-override label."
+    required: false
+    default: ""
 outputs:
   verdict:
-    description: pass or fail.
+    description: pass, fail or overridden.
     value: ${{ steps.gate.outputs.verdict }}
   report:
     description: Path to the JSON report.
@@ -34,14 +38,17 @@ runs:
         BP_BASE: ${{ inputs.base || github.event.pull_request.base.sha }}
         BP_HEAD: ${{ inputs.head || github.event.pull_request.head.sha || 'HEAD' }}
         BP_FAIL_ON: ${{ inputs.fail-on }}
+        BP_OVERRIDE: ${{ inputs.override || contains(github.event.pull_request.labels.*.name, 'backpressure-override') }}
         BP_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
       run: |
         report="$RUNNER_TEMP/backpressure-tamper.json"
         echo "report=$report" >> "$GITHUB_OUTPUT"
         status=0
+        override=()
+        if [ "$BP_OVERRIDE" = true ]; then override=(--override); fi
         uv run --quiet --no-dev --project "$GITHUB_ACTION_PATH" backpressure tamper \
           --base "$BP_BASE" --head "$BP_HEAD" --fail-on "$BP_FAIL_ON" \
-          --repo-url "$BP_REPO_URL" --json "$report" || status=$?
+          --repo-url "$BP_REPO_URL" --json "$report" "${override[@]}" || status=$?
         if [ -f "$report" ]; then
           echo "verdict=$(jq -r .verdict "$report")" >> "$GITHUB_OUTPUT"
         fi
