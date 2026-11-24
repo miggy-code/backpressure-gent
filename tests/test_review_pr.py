@@ -21,6 +21,7 @@ def test_checkout_does_not_run_a_filter_the_pr_selects(tmp_path: Path, monkeypat
     global_config = tmp_path / "gitconfig"
     global_config.write_text(f'[filter "lfs"]\n\tclean = cat\n\tsmudge = {smudge}\n\trequired = true\n')
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")  # runners set up real git-lfs in system config
 
     repo = tmp_path / "repo"
     repo.mkdir()
