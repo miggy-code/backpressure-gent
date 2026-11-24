@@ -35,7 +35,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      pull-requests: write # commenting on a pull request needs this, not issues: write alone
     outputs:
       allowed: ${{ steps.start.outputs.allowed }}
       head_sha: ${{ steps.start.outputs.head_sha }}
