@@ -37,7 +37,7 @@ jobs:
         with:
           fetch-depth: 0 # the gate needs the merge base
           persist-credentials: false
-      - uses: miggy-code/backpressure@<commit-sha>
+      - uses: miggy-code/backpressure-gent@<commit-sha>
         with:
           fail-on: blocking # or "never" to report only
 ```
