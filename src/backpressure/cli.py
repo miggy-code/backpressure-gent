@@ -42,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     markdown = report.to_markdown(args.repo_url)
     print(markdown)
     if args.json:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(report.to_json() + "\n")
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary, "a", encoding="utf-8") as fh:
