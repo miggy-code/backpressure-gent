@@ -88,11 +88,11 @@ def test_rendered_review_never_contains_holdout_names() -> None:
 
 
 def test_script_runs_the_clean_venv_without_start_up_paths_from_the_pr() -> None:
-    script = holdout_script("b" * 40, "h" * 40)
+    script = holdout_script()
     assert script.count("/opt/holdout-venv/bin/python -I -B -m pytest") == 2
-    assert "/work/.venv" not in script
+    assert "/work" not in script and "git " not in script
     assert "PYTHONPATH" not in script
-    assert "-o pythonpath='/work /work/src'" in script
+    assert "-o pythonpath='/base /base/src'" in script and "-o pythonpath='/head /head/src'" in script
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in script
     assert script.count("timeout 300 ") == 2
 
@@ -113,9 +113,8 @@ class FakeRunner:
             raise SandboxError("pip exploded: secret detail")
         return "/opt/holdout-venv"
 
-    def run_isolated(self, command: str, mounts: dict[Path, str], timeout: int = 600, holdout_venv: bool = False) -> RunResult:
+    def run_clean(self, command: str, mounts: dict[Path, str], trees: dict[str, str], timeout: int = 600) -> RunResult:
         self.ran = True
-        assert holdout_venv
         return RunResult(command, 0, "", False, 0.0)
 
 

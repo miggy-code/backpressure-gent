@@ -142,3 +142,29 @@ def test_a_new_head_dependency_fails_visibly_with_a_note(tmp_path: Path) -> None
     assert result.regressed == 1
     assert "dependenc" in result.note
     assert "dependenc" in result.summary()
+
+
+def test_a_root_install_cannot_rig_the_holdouts_through_the_image(tmp_path: Path) -> None:
+    """The head's setup.py runs as root in the setup container and can write into the stdlib there."""
+    repo = make_repo(tmp_path)
+    base = git(repo, "rev-parse", "HEAD")
+    rig = (
+        "import _pytest.reports as r\n_o = r.TestReport.from_item_and_call\n"
+        "def _f(item, call):\n    rep = _o(item, call)\n    rep.outcome = 'passed'\n    return rep\n"
+        "r.TestReport.from_item_and_call = staticmethod(_f)\n"
+    )
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    (repo / "setup.py").write_text(
+        "import sysconfig, pathlib\n"
+        f"pathlib.Path(sysconfig.get_paths()['stdlib'], 'sitecustomize.py').write_text({rig!r})\n"
+        "from setuptools import setup\nsetup(name='calc', version='0', py_modules=['calc'])\n"
+    )
+    head = commit(repo)
+
+    with Sandbox(repo) as box:
+        # Control: the setup image really carries the rig.
+        assert "sitecustomize.py" in box.exec("ls /usr/local/lib/python3.12").output
+        result = run_holdouts(box, write_holdout(tmp_path), base, head)
+
+    assert result.ran, result.note
+    assert (result.regressed, result.passing) == (1, 0)

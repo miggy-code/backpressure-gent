@@ -158,27 +158,18 @@ class Sandbox:
 
         The builder container starts from the bare base image and receives only `git archive ref`, so no
         install or build code from the PR's head ever runs next to, or writes into, this venv. It lands in
-        a Docker volume that `run_isolated(..., holdout_venv=True)` mounts read-only. Raises SandboxError.
+        a Docker volume that `run_clean` mounts read-only. Raises SandboxError.
         """
         if self._venv:
             return HOLDOUT_VENV
         volume = f"backpressure-venv-{self._id}"
         builder = f"backpressure-venvbuild-{self._id}"
-        # The checkout holds PR-chosen .gitattributes: ignore host git config so no filter runs on the host.
-        env = os.environ | {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
         _docker("volume", "create", volume)
         self._venv = volume
         try:
             _docker("create", "--name", builder, *SETUP_LIMITS, "-v", f"{volume}:{HOLDOUT_VENV}", "-w", "/src",
                     _base_image(), "sh", "-c", BUILD_HOLDOUT_VENV)  # fmt: skip
-            archive = subprocess.run(
-                ["git", "-C", str(self._checkout), "archive", "--prefix=src/", ref], capture_output=True, env=env, check=False
-            )
-            if archive.returncode != 0:
-                raise SandboxError(f"git archive {ref[:7]} failed: {archive.stderr.decode(errors='replace')[-500:]}")
-            put = subprocess.run(["docker", "cp", "-", f"{builder}:/"], input=archive.stdout, capture_output=True, check=False)
-            if put.returncode != 0:
-                raise SandboxError(f"docker cp failed: {put.stderr.decode(errors='replace')[-500:]}")
+            _copy_tree(self._checkout, ref, "src", builder)
             proc = _docker("start", "-a", builder, check=False, timeout=self._setup_timeout)
             if proc.returncode != 0:
                 raise SandboxError(f"building the holdout venv failed:\n{proc.stdout[-2000:]}")
@@ -186,26 +177,27 @@ class Sandbox:
             _docker("rm", "-f", builder, check=False)
         return HOLDOUT_VENV
 
-    def run_isolated(self, command: str, mounts: dict[Path, str], timeout: int = 600, holdout_venv: bool = False) -> RunResult:
-        """Run in a fresh container from the installed image, apart from the model's work container.
+    def run_clean(self, command: str, mounts: dict[Path, str], trees: dict[str, str], timeout: int = 600) -> RunResult:
+        """Run in a fresh container from the BARE base image, sharing nothing with the PR's install.
 
-        Used for checks the model must not see, such as holdouts: `mounts` are bind-mounted read-only
-        here and never in the work container. Same limits, no network, removed afterwards. With
-        `holdout_venv` (built first by `build_holdout_venv`) that venv is mounted read-only and put
-        first on PATH in place of the PR's own `/work/.venv`.
+        The setup image is tainted: the head's install ran in it as root and could have written into the
+        stdlib, `site.py`, the python binary, `git` or `sh`. So this container starts from the untouched
+        base image (never written to: containers are removed afterwards), gets the clean venv from
+        `build_holdout_venv` read-only, `mounts` read-only (host path -> container path), and each of
+        `trees` (directory name -> git ref) as a `git archive` copy at /<name>. Same limits, no network.
         """
-        assert self._image, "sandbox is not running"
+        assert self._venv, "build_holdout_venv has not run"
         name = f"backpressure-isolated-{uuid.uuid4().hex[:12]}"
-        work_env = dict(WORK_ENV)
-        volumes = [arg for host, target in mounts.items() for arg in ("-v", f"{host.resolve()}:{target}:ro")]
-        if holdout_venv:
-            assert self._venv, "build_holdout_venv has not run"
-            volumes += ["-v", f"{self._venv}:{HOLDOUT_VENV}:ro"]
-            work_env |= {"PATH": f"{HOLDOUT_VENV}/bin:/usr/local/bin:/usr/bin:/bin", "VIRTUAL_ENV": HOLDOUT_VENV}
+        work_env = dict(WORK_ENV) | {"PATH": f"{HOLDOUT_VENV}/bin:/usr/local/bin:/usr/bin:/bin", "VIRTUAL_ENV": HOLDOUT_VENV}
         env = [arg for k, v in work_env.items() for arg in ("-e", f"{k}={v}")]
-        argv = ["docker", "run", "--name", name, *LIMITS, *env, *volumes, "-w", "/work", self._image]
+        volumes = [arg for host, target in mounts.items() for arg in ("-v", f"{host.resolve()}:{target}:ro")]
+        volumes += ["-v", f"{self._venv}:{HOLDOUT_VENV}:ro"]
         try:
-            return _stream([*argv, "timeout", "-k", "5", str(timeout), "sh", "-c", command], command, timeout)
+            _docker("create", "--name", name, *LIMITS, *env, *volumes, "-w", "/tmp", _base_image(),
+                    "timeout", "-k", "5", str(timeout), "sh", "-c", command)  # fmt: skip
+            for target, ref in trees.items():
+                _copy_tree(self._checkout, ref, target, name)
+            return _stream(["docker", "start", "-a", name], command, timeout)
         finally:
             _docker("rm", "-f", name, check=False)
 
@@ -254,6 +246,18 @@ def _stream(argv: list[str], command: str, timeout: int) -> RunResult:
     if timed_out:
         output += f"\n[killed after {timeout}s timeout]"
     return RunResult(command, code, output, timed_out, round(seconds, 2))
+
+
+def _copy_tree(checkout: Path, ref: str, target: str, container: str) -> None:
+    """Put `git archive ref` of the host checkout at /<target> in a created container."""
+    # The checkout holds PR-chosen .gitattributes: ignore host git config so no filter runs on the host.
+    env = os.environ | {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    archive = subprocess.run(["git", "-C", str(checkout), "archive", f"--prefix={target}/", ref], capture_output=True, env=env, check=False)
+    if archive.returncode != 0:
+        raise SandboxError(f"git archive {ref[:7]} failed: {archive.stderr.decode(errors='replace')[-500:]}")
+    put = subprocess.run(["docker", "cp", "-", f"{container}:/"], input=archive.stdout, capture_output=True, check=False)
+    if put.returncode != 0:
+        raise SandboxError(f"docker cp failed: {put.stderr.decode(errors='replace')[-500:]}")
 
 
 def docker_available() -> bool:

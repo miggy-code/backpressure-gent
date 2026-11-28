@@ -22,11 +22,11 @@ DEPS_CHANGED = (
     "so a new dependency shows up as a failure rather than a pass"
 )
 # Files that decide what the install pulls in; compared between the merge base and head.
-DEPENDENCY_FILES = "pyproject.toml uv.lock setup.py setup.cfg 'requirements*.txt'"
+DEPENDENCY_FILES = "pyproject.toml uv.lock setup.py setup.cfg requirements*.txt"
 
 
 class IsolatedRunner(Protocol):
-    def run_isolated(self, command: str, mounts: dict[Path, str], timeout: int = 600, holdout_venv: bool = False) -> RunResult: ...
+    def run_clean(self, command: str, mounts: dict[Path, str], trees: dict[str, str], timeout: int = 600) -> RunResult: ...
 
     def build_holdout_venv(self, ref: str) -> str: ...
 
@@ -67,25 +67,31 @@ def holdout_dir(root: Path, repo: str) -> Path | None:
     return d if d.is_dir() and any(d.rglob("test_*.py")) else None
 
 
-def holdout_script(base_sha: str, head_sha: str) -> str:
+def holdout_script() -> str:
     """The shell script for the holdouts container. Pure, so tests can check how pytest is launched.
 
-    Interpreter: the clean venv at HOLDOUT_VENV (merge base dependencies, mounted read-only), never
-    /work/.venv, which the PR's install filled. `-I` keeps the cwd and PYTHON* variables off sys.path,
-    and the code under test joins sys.path through pytest's `pythonpath` ini option after start-up, so a
-    `.pth`, `sitecustomize.py` or `usercustomize.py` in the PR tree never runs. Plugin autoloading is off
-    (an entry-point plugin could pass everything) and pytest runs from /holdouts with that as its rootdir,
-    so the PR's pytest config and conftest files are not read. `/work/src` covers src layouts.
+    The container is the bare base image with the merge base at /base and the head at /head (git
+    archives, so no .git and no git needed), the clean venv at HOLDOUT_VENV, and nothing the PR's
+    install touched. Interpreter: that venv, never /work/.venv. `-I` keeps the cwd and PYTHON* variables
+    off sys.path, and the code under test joins sys.path through pytest's `pythonpath` ini option after
+    start-up, so a `.pth`, `sitecustomize.py` or `usercustomize.py` in the PR tree never runs. Plugin
+    autoloading is off (an entry-point plugin could pass everything) and pytest runs from /holdouts with
+    that as its rootdir, so the PR's pytest config and conftest files are not read. `src` covers src layouts.
     """
-    pytest = (
-        f"cd /holdouts && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 timeout {PER_RUN_TIMEOUT} {HOLDOUT_VENV}/bin/python -I -B -m pytest "
-        "/holdouts -q -p no:cacheprovider --rootdir=/holdouts -o pythonpath='/work /work/src'"
-    )
+
+    def pytest(tree: str) -> str:
+        return (
+            f"(cd /holdouts && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 timeout {PER_RUN_TIMEOUT} {HOLDOUT_VENV}/bin/python -I -B -m pytest "
+            f"/holdouts -q -p no:cacheprovider --rootdir=/holdouts -o pythonpath='/{tree} /{tree}/src' "
+            f"--junitxml=/tmp/{tree}.xml >/dev/null 2>&1)"
+        )
+
     return "\n".join([
-        "cd /work",
-        f"git checkout -q --force {base_sha} && ({pytest} --junitxml=/tmp/base.xml >/dev/null 2>&1)",
-        f"git checkout -q --force {head_sha} && ({pytest} --junitxml=/tmp/head.xml >/dev/null 2>&1)",
-        f"echo {MARK_DEPS}; git diff --quiet {base_sha} {head_sha} -- {DEPENDENCY_FILES} && echo same || echo changed",
+        pytest("base"),
+        pytest("head"),
+        f"echo {MARK_DEPS}",
+        f"files=$( (cd /base && ls {DEPENDENCY_FILES}; cd /head && ls {DEPENDENCY_FILES}) 2>/dev/null | sort -u )",
+        "state=same; for f in $files; do cmp -s /base/$f /head/$f || state=changed; done; echo $state",
         f"echo {MARK_BASE}; cat /tmp/base.xml 2>/dev/null",
         f"echo {MARK_HEAD}; cat /tmp/head.xml 2>/dev/null",
         f"echo {MARK_END}",
@@ -95,12 +101,12 @@ def holdout_script(base_sha: str, head_sha: str) -> str:
 def run_holdouts(runner: IsolatedRunner, holdouts: Path, base_sha: str, head_sha: str) -> HoldoutResult:
     try:
         runner.build_holdout_venv(base_sha)
+        result = runner.run_clean(
+            holdout_script(), {holdouts: "/holdouts"}, {"base": base_sha, "head": head_sha}, timeout=2 * PER_RUN_TIMEOUT + 60
+        )
     except SandboxError:
-        # Never fall back to the PR's own venv: that is the thing a PR can rig.
+        # Never fall back to the PR's venv or image: that is the thing a PR can rig.
         return HoldoutResult(ran=False, note="the clean holdout environment could not be built from the merge base")
-    result = runner.run_isolated(
-        holdout_script(base_sha, head_sha), {holdouts: "/holdouts"}, timeout=2 * PER_RUN_TIMEOUT + 60, holdout_venv=True
-    )
     return parse_run(result.output)
 
 
