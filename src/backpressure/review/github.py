@@ -56,18 +56,39 @@ class Start:
     comment_id: int = 0
 
 
-def start(api: GitHubApi, repo: str, number: int, requester: str, run_url: str, allow_forks: bool = False) -> Start:
-    """Check who asked and what for. Refusals are explained on the PR and the trigger label is removed."""
+def start(
+    api: GitHubApi,
+    repo: str,
+    number: int,
+    requester: str,
+    run_url: str,
+    allow_forks: bool = False,
+    expected_head: str | None = None,
+) -> Start:
+    """Check who asked and why. Report manual refusals on the PR and remove the trigger label."""
     pr = api.request("GET", f"repos/{repo}/pulls/{number}")
     head_sha = pr["head"]["sha"]
-    reason = _refusal(api, repo, pr, requester, allow_forks)
+    reason = _automatic_refusal(repo, pr, expected_head) if expected_head else ""
+    reason = reason or _refusal(api, repo, pr, requester, allow_forks)
     if reason:
+        if expected_head:
+            return Start(False, reason, head_sha)
         api.request("POST", f"repos/{repo}/issues/{number}/comments", {"body": f"Backpressure review not started: {reason}"})
         remove_trigger(api, repo, number)
         return Start(False, reason, head_sha)
     body = f"Backpressure review started on `{head_sha[:7]}`. [Run]({run_url})"
     comment = api.request("POST", f"repos/{repo}/issues/{number}/comments", {"body": body})
     return Start(True, "", head_sha, int(comment["id"]))
+
+
+def _automatic_refusal(repo: str, pr: dict[str, Any], head_sha: str) -> str:
+    if pr["state"] != "open" or pr["draft"]:
+        return "the pull request is no longer open and ready for review."
+    if (pr["head"].get("repo") or {}).get("full_name") != repo:
+        return "automatic reviews only run on branches in the same repository."
+    if pr["head"]["sha"] != head_sha:
+        return "the pull request head changed."
+    return ""
 
 
 def _refusal(api: GitHubApi, repo: str, pr: dict[str, Any], requester: str, allow_forks: bool) -> str:
@@ -88,9 +109,23 @@ def _refusal(api: GitHubApi, repo: str, pr: dict[str, Any], requester: str, allo
     return ""
 
 
-def finish(api: GitHubApi, repo: str, number: int, out: Path | None, comment_id: int, head_sha: str, run_url: str) -> Verdict | None:
-    """Post one COMMENT review and exactly one verdict label. The trigger label is always removed."""
+def finish(
+    api: GitHubApi,
+    repo: str,
+    number: int,
+    out: Path | None,
+    comment_id: int,
+    head_sha: str,
+    run_url: str,
+    automatic: bool = False,
+) -> Verdict | None:
+    """Post a COMMENT review. Manage verdict and trigger labels for manual requests."""
     try:
+        if automatic:
+            pr = api.request("GET", f"repos/{repo}/pulls/{number}")
+            if reason := _automatic_refusal(repo, pr, head_sha):
+                _status(api, repo, comment_id, f"Backpressure review skipped: {reason} [Run]({run_url})")
+                return None
         review = _load(out)
         if review is None:
             md = out / "review.md" if out else None
@@ -103,12 +138,14 @@ def finish(api: GitHubApi, repo: str, number: int, out: Path | None, comment_id:
         verdict = Verdict(review["verdict"])
         assert out is not None
         posted = _post_review(api, repo, number, head_sha, (out / "review.md").read_text(), _inline(review))
-        _set_label(api, repo, number, verdict)
+        if not automatic:
+            _set_label(api, repo, number, verdict)
         word = verdict.value.replace("_", " ")
         _status(api, repo, comment_id, f"Backpressure review finished: **{word}**. [Review]({posted['html_url']})")
         return verdict
     finally:
-        remove_trigger(api, repo, number)
+        if not automatic:
+            remove_trigger(api, repo, number)
 
 
 def remove_trigger(api: GitHubApi, repo: str, number: int) -> None:
