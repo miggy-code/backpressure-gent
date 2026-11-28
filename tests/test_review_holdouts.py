@@ -1,10 +1,24 @@
 """Holdouts: parse, classify, block on regressions, and never show a holdout's name or source."""
 
 import json
+from pathlib import Path
 
-from backpressure.review.holdouts import MARK_BASE, MARK_END, MARK_HEAD, HoldoutResult, classify, parse_junit, parse_run
+from backpressure.review.holdouts import (
+    DEPS_CHANGED,
+    MARK_BASE,
+    MARK_DEPS,
+    MARK_END,
+    MARK_HEAD,
+    HoldoutResult,
+    classify,
+    holdout_script,
+    parse_junit,
+    parse_run,
+    run_holdouts,
+)
 from backpressure.review.model import Usage
 from backpressure.review.render import RunInfo, to_json, to_markdown
+from backpressure.review.sandbox import RunResult, SandboxError
 from backpressure.review.schema import Review, Scorecard, Verdict, Verified, verdict
 
 SECRET_NAME = "test_discount_never_exceeds_cap_for_vip_orders"
@@ -71,3 +85,42 @@ def test_rendered_review_never_contains_holdout_names() -> None:
     for text in (md, data, REGRESSED.summary(), json.dumps(REGRESSED.counts())):
         assert SECRET_NAME not in text and "test_shop" not in text
     assert json.loads(data)["holdouts"]["regressed"] == 1
+
+
+def test_script_runs_the_clean_venv_without_start_up_paths_from_the_pr() -> None:
+    script = holdout_script("b" * 40, "h" * 40)
+    assert script.count("/opt/holdout-venv/bin/python -I -B -m pytest") == 2
+    assert "/work/.venv" not in script
+    assert "PYTHONPATH" not in script
+    assert "-o pythonpath='/work /work/src'" in script
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in script
+    assert script.count("timeout 300 ") == 2
+
+
+def test_parse_run_notes_changed_dependency_manifests() -> None:
+    xml = junit(("test_a", "pass"))
+    out = f"{MARK_DEPS}\nchanged\n{MARK_BASE}\n{xml}\n{MARK_HEAD}\n{xml}\n{MARK_END}\n"
+    assert parse_run(out).note == DEPS_CHANGED
+    assert parse_run(out.replace("changed", "same")).note == ""
+
+
+class FakeRunner:
+    def __init__(self, build_error: bool) -> None:
+        self.build_error, self.ran = build_error, False
+
+    def build_holdout_venv(self, ref: str) -> str:
+        if self.build_error:
+            raise SandboxError("pip exploded: secret detail")
+        return "/opt/holdout-venv"
+
+    def run_isolated(self, command: str, mounts: dict[Path, str], timeout: int = 600, holdout_venv: bool = False) -> RunResult:
+        self.ran = True
+        assert holdout_venv
+        return RunResult(command, 0, "", False, 0.0)
+
+
+def test_a_failed_venv_build_reports_not_run_and_never_uses_the_pr_venv() -> None:
+    runner = FakeRunner(build_error=True)
+    result = run_holdouts(runner, Path("/h"), "b", "h")
+    assert not result.ran and not runner.ran
+    assert "secret detail" not in result.note

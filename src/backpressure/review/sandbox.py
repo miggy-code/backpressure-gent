@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -43,6 +44,25 @@ for f in requirements*.txt; do [ -f "$f" ] && uv pip install -q -p .venv -r "$f"
 .venv/bin/python -c 'import pytest' 2>/dev/null || uv pip install -q -p .venv pytest
 rm -rf /tmp/uv-cache
 chown -R 1000:1000 /work
+"""
+
+# Builds the holdout venv from the MERGE BASE's dependencies only (the base is already merged, so it is
+# trusted), never from head code. Runs as root with network in a container that holds nothing from the PR.
+HOLDOUT_VENV = "/opt/holdout-venv"
+BUILD_HOLDOUT_VENV = f"""set -e
+cd /src
+export UV_LINK_MODE=copy UV_CACHE_DIR=/tmp/uv-cache UV_PYTHON_DOWNLOADS=never
+uv venv -q --python /usr/local/bin/python {HOLDOUT_VENV}
+add() {{ uv pip install -q -p {HOLDOUT_VENV} "$@"; }}
+if [ -f uv.lock ]; then
+  uv export -q --frozen --all-extras --no-hashes --no-emit-project --no-emit-workspace -o /tmp/req.txt
+  add -r /tmp/req.txt
+elif [ -f pyproject.toml ]; then
+  add -r pyproject.toml --extra test || add -r pyproject.toml
+fi
+for f in requirements*.txt; do [ -f "$f" ] && add -r "$f"; done
+{HOLDOUT_VENV}/bin/python -c 'import pytest' 2>/dev/null || add pytest
+chmod -R a+rX {HOLDOUT_VENV}
 """
 
 WORK_ENV = {
@@ -90,6 +110,7 @@ class Sandbox:
         self._id = uuid.uuid4().hex[:12]
         self._image: str | None = None
         self._container: str | None = None
+        self._venv: str | None = None  # Docker volume holding the holdout venv, built on first use
         self.setup_log = ""
 
     def __enter__(self) -> Sandbox:
@@ -119,6 +140,9 @@ class Sandbox:
         if self._container:
             _docker("rm", "-f", self._container, check=False)
             self._container = None
+        if self._venv:
+            _docker("volume", "rm", "-f", self._venv, check=False)
+            self._venv = None
         if self._image:
             _docker("rmi", "-f", self._image, check=False)
             self._image = None
@@ -129,16 +153,56 @@ class Sandbox:
         # is only a backstop if docker itself hangs.
         return _stream(["docker", "exec", self._container, "timeout", "-k", "5", str(timeout), "sh", "-c", command], command, timeout)
 
-    def run_isolated(self, command: str, mounts: dict[Path, str], timeout: int = 600) -> RunResult:
+    def build_holdout_venv(self, ref: str) -> str:
+        """Build /opt/holdout-venv from the dependencies at `ref`, and return the venv's path in the container.
+
+        The builder container starts from the bare base image and receives only `git archive ref`, so no
+        install or build code from the PR's head ever runs next to, or writes into, this venv. It lands in
+        a Docker volume that `run_isolated(..., holdout_venv=True)` mounts read-only. Raises SandboxError.
+        """
+        if self._venv:
+            return HOLDOUT_VENV
+        volume = f"backpressure-venv-{self._id}"
+        builder = f"backpressure-venvbuild-{self._id}"
+        # The checkout holds PR-chosen .gitattributes: ignore host git config so no filter runs on the host.
+        env = os.environ | {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        _docker("volume", "create", volume)
+        self._venv = volume
+        try:
+            _docker("create", "--name", builder, *SETUP_LIMITS, "-v", f"{volume}:{HOLDOUT_VENV}", "-w", "/src",
+                    _base_image(), "sh", "-c", BUILD_HOLDOUT_VENV)  # fmt: skip
+            archive = subprocess.run(
+                ["git", "-C", str(self._checkout), "archive", "--prefix=src/", ref], capture_output=True, env=env, check=False
+            )
+            if archive.returncode != 0:
+                raise SandboxError(f"git archive {ref[:7]} failed: {archive.stderr.decode(errors='replace')[-500:]}")
+            put = subprocess.run(["docker", "cp", "-", f"{builder}:/"], input=archive.stdout, capture_output=True, check=False)
+            if put.returncode != 0:
+                raise SandboxError(f"docker cp failed: {put.stderr.decode(errors='replace')[-500:]}")
+            proc = _docker("start", "-a", builder, check=False, timeout=self._setup_timeout)
+            if proc.returncode != 0:
+                raise SandboxError(f"building the holdout venv failed:\n{proc.stdout[-2000:]}")
+        finally:
+            _docker("rm", "-f", builder, check=False)
+        return HOLDOUT_VENV
+
+    def run_isolated(self, command: str, mounts: dict[Path, str], timeout: int = 600, holdout_venv: bool = False) -> RunResult:
         """Run in a fresh container from the installed image, apart from the model's work container.
 
         Used for checks the model must not see, such as holdouts: `mounts` are bind-mounted read-only
-        here and never in the work container. Same limits, no network, removed afterwards.
+        here and never in the work container. Same limits, no network, removed afterwards. With
+        `holdout_venv` (built first by `build_holdout_venv`) that venv is mounted read-only and put
+        first on PATH in place of the PR's own `/work/.venv`.
         """
         assert self._image, "sandbox is not running"
         name = f"backpressure-isolated-{uuid.uuid4().hex[:12]}"
-        env = [arg for k, v in WORK_ENV.items() for arg in ("-e", f"{k}={v}")]
+        work_env = dict(WORK_ENV)
         volumes = [arg for host, target in mounts.items() for arg in ("-v", f"{host.resolve()}:{target}:ro")]
+        if holdout_venv:
+            assert self._venv, "build_holdout_venv has not run"
+            volumes += ["-v", f"{self._venv}:{HOLDOUT_VENV}:ro"]
+            work_env |= {"PATH": f"{HOLDOUT_VENV}/bin:/usr/local/bin:/usr/bin:/bin", "VIRTUAL_ENV": HOLDOUT_VENV}
+        env = [arg for k, v in work_env.items() for arg in ("-e", f"{k}={v}")]
         argv = ["docker", "run", "--name", name, *LIMITS, *env, *volumes, "-w", "/work", self._image]
         try:
             return _stream([*argv, "timeout", "-k", "5", str(timeout), "sh", "-c", command], command, timeout)
