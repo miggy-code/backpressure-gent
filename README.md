@@ -121,7 +121,7 @@ jobs:
       HOLDOUTS_DEPLOY_KEY: ${{ secrets.HOLDOUTS_DEPLOY_KEY }}
 ```
 
-Automatic reviews run on ready pull requests from branches in the same repository. The reviewer checks the requester's write access, caps each run at $0.25, and posts a COMMENT review for the commit it reviewed. Use the separate tamper gate to check fork PRs.
+Automatic reviews run on ready pull requests from branches in the same repository. The reviewer checks the requester's write access, uses DeepSeek Flash, caps each run at $0.25, and posts a COMMENT review for the commit it reviewed. Use the separate tamper gate to check fork PRs.
 
 ### Holdout scenarios
 

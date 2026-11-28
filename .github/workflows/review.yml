@@ -52,6 +52,11 @@ jobs:
       head_sha: ${{ steps.start.outputs.head_sha }}
       comment_id: ${{ steps.start.outputs.comment_id }}
     steps:
+      - name: Require workflow source identity
+        if: ${{ !job.workflow_repository || !job.workflow_sha }}
+        run: |
+          echo "::error::GitHub did not provide the Backpressure workflow source identity."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ job.workflow_repository }}
@@ -115,12 +120,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           HEAD_SHA: ${{ needs.start.outputs.head_sha }}
+          MODEL: ${{ inputs.head_sha != '' && 'deepseek-flash' || 'deepseek-v4-pro' }}
           MAX_USD: ${{ inputs.head_sha != '' && '0.25' || '1.00' }}
         run: |
           set +e
           holdouts=()
           if [ -n "${HOLDOUTS_DIR:-}" ]; then holdouts=(--holdouts "$HOLDOUTS_DIR"); fi
-          uv run --frozen --no-dev backpressure review --repo "$GITHUB_REPOSITORY" --pr "$PR" --head-sha "$HEAD_SHA" --max-usd "$MAX_USD" --out out "${holdouts[@]}"
+          uv run --frozen --no-dev backpressure review --repo "$GITHUB_REPOSITORY" --pr "$PR" --head-sha "$HEAD_SHA" --model "$MODEL" --max-usd "$MAX_USD" --out out "${holdouts[@]}"
           code=$?
           echo "Review exit code: $code (0 approve, 1 request changes or close, 2 error)"
           test "$code" -le 1
