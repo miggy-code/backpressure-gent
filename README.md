@@ -81,7 +81,7 @@ The PR title, body and diff are given to the model as untrusted data. Code you r
 | `review` | DeepSeek key, read-only token | only inside the Docker sandbox; stops if any secret reaches the sandbox environment, and its output files are checked for secrets before upload |
 | `post` | write token | no: posts the review and label from the review job's files |
 
-Every job checks out the base branch, so the workflow never runs the PR's own version of Backpressure. To set it up, create an environment named `review` that only the default branch may use, and store `DEEPSEEK_API_KEY` in it. Fork PRs are refused unless the repository variable `BACKPRESSURE_ALLOW_FORKS` is `true`. Model text is escaped before posting, so it cannot @mention people or inject HTML.
+Every job checks out the workflow's own source commit. The workflow runs PR code only inside the sandbox. To set it up, create an environment named `review` that only the default branch may use, and store `DEEPSEEK_API_KEY` in it. Fork PRs are refused unless the repository variable `BACKPRESSURE_ALLOW_FORKS` is `true`. Model text is escaped before posting, so it cannot @mention people or inject HTML.
 
 Labels the workflow uses:
 
@@ -92,6 +92,36 @@ Labels the workflow uses:
 | `backpressure-request-changes` | the workflow | The review's verdict is request changes. |
 | `backpressure-close` | the workflow | The review found a prompt injection or a duplicate PR. |
 | `backpressure-override` | a maintainer | The tamper gate lists its findings as overridden and passes. |
+
+### Automatic reviews from another repository
+
+In the target repository, create a `review` environment restricted to its default branch and add the `DEEPSEEK_API_KEY` environment secret. For private holdouts, add a read-only `HOLDOUTS_DEPLOY_KEY` to the same environment.
+
+Add a caller workflow and replace `BACKPRESSURE_SHA` with a full Backpressure commit SHA that contains the reusable workflow.
+
+```yaml
+name: Backpressure review
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, ready_for_review, synchronize]
+permissions: {}
+jobs:
+  review:
+    if: ${{ github.event.pull_request.head.repo.id == github.event.repository.id && !github.event.pull_request.draft }}
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: miggy-code/backpressure-gent/.github/workflows/review.yml@BACKPRESSURE_SHA
+    with:
+      head_sha: ${{ github.event.pull_request.head.sha }}
+    secrets:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      HOLDOUTS_DEPLOY_KEY: ${{ secrets.HOLDOUTS_DEPLOY_KEY }}
+```
+
+Automatic reviews run on ready pull requests from branches in the same repository. The reviewer checks the requester's write access, uses DeepSeek Flash, caps each run at $0.25, and posts a COMMENT review for the commit it reviewed. Use the separate tamper gate to check fork PRs.
 
 ### Holdout scenarios
 

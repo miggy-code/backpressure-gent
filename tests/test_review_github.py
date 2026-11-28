@@ -17,7 +17,7 @@ class FakeApi:
     def __init__(self, permission: str = "write", state: str = "open", head_repo: str = REPO) -> None:
         self.calls: list[tuple[str, str, Any]] = []
         self.permission = permission
-        self.pr = {"state": state, "head": {"sha": HEAD, "repo": {"full_name": head_repo}}}
+        self.pr = {"state": state, "draft": False, "head": {"sha": HEAD, "repo": {"full_name": head_repo}}}
         self.fail: dict[tuple[str, str], ApiError] = {}
 
     def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
@@ -69,6 +69,23 @@ def test_forks_run_when_enabled() -> None:
     assert start(FakeApi(head_repo="someone/fork"), REPO, 1, "miggy-code", "https://run", allow_forks=True).allowed
 
 
+@pytest.mark.parametrize(
+    ("api", "head", "draft"),
+    [
+        (FakeApi(), "b" * 40, False),
+        (FakeApi(head_repo="someone/fork"), HEAD, False),
+        (FakeApi(), HEAD, True),
+        (FakeApi(state="closed"), HEAD, False),
+        (FakeApi(permission="read"), HEAD, False),
+    ],
+)
+def test_automatic_start_only_accepts_a_current_ready_same_repo_pr_from_a_writer(api: FakeApi, head: str, draft: bool) -> None:
+    api.pr["head"]["sha"] = head
+    api.pr["draft"] = draft
+    assert not start(api, REPO, 1, "contributor", "https://run", allow_forks=True, expected_head=HEAD).allowed
+    assert all(method == "GET" for method, _, _ in api.calls)
+
+
 def write_review(out: Path, verdict: str = "request_changes", head: str = HEAD, line: int | None = 12) -> Path:
     finding = {"severity": "blocking", "title": "Untested @team <b>x</b>", "body": "Breaks.", "path": "app.py", "line": line,
                "outside_diff": False, "evidence": []}  # fmt: skip
@@ -91,6 +108,25 @@ def test_posts_one_review_and_exactly_one_label(tmp_path: Path) -> None:
     deleted = {p.rsplit("/", 1)[1] for m, p, _ in api.calls if m == "DELETE"}
     assert deleted == {"backpressure-approved", "backpressure-close", TRIGGER}
     assert "request changes" in api.made("PATCH", "/issues/comments/77")[0]["body"]
+
+
+def test_automatic_review_posts_for_the_current_head_without_changing_labels(tmp_path: Path) -> None:
+    api = FakeApi()
+    started = start(api, REPO, 1, "contributor", "https://run", expected_head=HEAD)
+    assert started.allowed
+    verdict = finish(api, REPO, 1, write_review(tmp_path), started.comment_id, HEAD, "https://run", automatic=True)
+    assert verdict is not None and verdict.value == "request_changes"
+    (review,) = api.made("POST", "/pulls/1/reviews")
+    assert review["commit_id"] == HEAD and review["event"] == "COMMENT"
+    assert all("/labels" not in path for _, path, _ in api.calls)
+
+
+def test_automatic_review_of_a_superseded_head_is_skipped(tmp_path: Path) -> None:
+    api = FakeApi()
+    api.pr["head"]["sha"] = "b" * 40
+    assert finish(api, REPO, 1, write_review(tmp_path), 77, HEAD, "https://run", automatic=True) is None
+    assert not api.made("POST", "/pulls/1/reviews")
+    assert "head changed" in api.made("PATCH", "/issues/comments/77")[0]["body"]
 
 
 def test_inline_comment_github_rejects_falls_back_to_the_body_only(tmp_path: Path) -> None:

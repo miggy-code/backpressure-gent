@@ -6,10 +6,21 @@ name: Backpressure review
 #   review  model key (environment `review`, main only) and a read-only token: runs PR code only inside
 #           the Docker sandbox (no network, no env), writes the review to an artifact.
 #   post    write token, no model key, never runs PR code: posts the review and one verdict label.
-# Every job checks out the base branch, so the code that runs here is never the PR's.
+# Every job checks out this workflow's source commit, including when called from another repository.
 on:
   pull_request_target:
     types: [labeled]
+  workflow_call:
+    inputs:
+      head_sha:
+        description: Head commit from the caller's pull request event
+        required: true
+        type: string
+    secrets:
+      DEEPSEEK_API_KEY:
+        required: true
+      HOLDOUTS_DEPLOY_KEY:
+        required: false
   workflow_dispatch:
     inputs:
       pr:
@@ -29,7 +40,7 @@ env:
 
 jobs:
   start:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'backpressure-review'
+    if: inputs.head_sha != '' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'backpressure-review'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -41,20 +52,34 @@ jobs:
       head_sha: ${{ steps.start.outputs.head_sha }}
       comment_id: ${{ steps.start.outputs.comment_id }}
     steps:
+      - name: Require workflow source identity
+        if: ${{ !job.workflow_repository || !job.workflow_sha }}
+        run: |
+          echo "::error::GitHub did not provide the Backpressure workflow source identity."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - id: start
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTER: ${{ github.event.sender.login || github.actor }}
-          ALLOW_FORKS: ${{ vars.BACKPRESSURE_ALLOW_FORKS == 'true' && '--allow-forks' || '' }}
+          ALLOW_FORKS: ${{ vars.BACKPRESSURE_ALLOW_FORKS == 'true' }}
+          EXPECTED_HEAD: ${{ inputs.head_sha }}
         run: |
+          flags=()
+          if [ -n "$EXPECTED_HEAD" ]; then
+            flags+=(--expected-head "$EXPECTED_HEAD")
+          elif [ "$ALLOW_FORKS" = true ]; then
+            flags+=(--allow-forks)
+          fi
           uv run --frozen --no-dev backpressure github-start --repo "$GITHUB_REPOSITORY" --pr "$PR" \
-            --requester "$REQUESTER" --run-url "$RUN_URL" $ALLOW_FORKS
+            --requester "$REQUESTER" --run-url "$RUN_URL" "${flags[@]}"
       - name: Remove the trigger label so it can be added again
-        if: failure()
+        if: failure() && inputs.head_sha == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/backpressure-review" || true
@@ -71,6 +96,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - name: Fetch holdouts
@@ -93,11 +120,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           HEAD_SHA: ${{ needs.start.outputs.head_sha }}
+          MODEL: ${{ inputs.head_sha != '' && 'deepseek-flash' || 'deepseek-v4-pro' }}
+          MAX_USD: ${{ inputs.head_sha != '' && '0.25' || '1.00' }}
         run: |
           set +e
           holdouts=()
           if [ -n "${HOLDOUTS_DIR:-}" ]; then holdouts=(--holdouts "$HOLDOUTS_DIR"); fi
-          uv run --frozen --no-dev backpressure review --repo "$GITHUB_REPOSITORY" --pr "$PR" --head-sha "$HEAD_SHA" --out out "${holdouts[@]}"
+          uv run --frozen --no-dev backpressure review --repo "$GITHUB_REPOSITORY" --pr "$PR" --head-sha "$HEAD_SHA" --model "$MODEL" --max-usd "$MAX_USD" --out out "${holdouts[@]}"
           code=$?
           echo "Review exit code: $code (0 approve, 1 request changes or close, 2 error)"
           test "$code" -le 1
@@ -123,7 +152,7 @@ jobs:
         if: always()
         with:
           name: backpressure-review
-          path: out
+          path: ${{ inputs.head_sha != '' && 'out/review.*' || 'out' }}
           retention-days: 14
           overwrite: true
           if-no-files-found: ignore
@@ -140,6 +169,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -151,6 +182,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ needs.start.outputs.head_sha }}
           COMMENT_ID: ${{ needs.start.outputs.comment_id }}
+          AUTOMATIC: ${{ inputs.head_sha != '' }}
         run: |
+          flags=()
+          if [ "$AUTOMATIC" = true ]; then flags+=(--automatic); fi
           uv run --frozen --no-dev backpressure github-finish --repo "$GITHUB_REPOSITORY" --pr "$PR" --dir out \
-            --comment-id "$COMMENT_ID" --head-sha "$HEAD_SHA" --run-url "$RUN_URL"
+            --comment-id "$COMMENT_ID" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" "${flags[@]}"

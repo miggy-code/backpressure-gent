@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--run-url", required=True)
     gh_start.add_argument("--requester", required=True)
     gh_start.add_argument("--allow-forks", action="store_true")
+    gh_start.add_argument("--expected-head", help="Head SHA from an automatic review request.")
+    gh_finish.add_argument("--automatic", action="store_true")
     gh_finish.add_argument("--dir", type=Path, help="The review job's output folder, if it produced one.")
     gh_finish.add_argument("--comment-id", type=int, default=0)
     gh_finish.add_argument("--head-sha", required=True)
@@ -104,7 +106,9 @@ def _github(args: argparse.Namespace) -> int:
 
     api = github.GhCli()
     if args.command == "github-start":
-        started = github.start(api, args.repo, args.pr, args.requester, args.run_url, allow_forks=args.allow_forks)
+        started = github.start(
+            api, args.repo, args.pr, args.requester, args.run_url, allow_forks=args.allow_forks, expected_head=args.expected_head
+        )
         outputs = f"allowed={str(started.allowed).lower()}\nhead_sha={started.head_sha}\ncomment_id={started.comment_id}\n"
         print(outputs, end="")
         if out := os.environ.get("GITHUB_OUTPUT"):
@@ -114,6 +118,6 @@ def _github(args: argparse.Namespace) -> int:
             print(f"backpressure: not started: {started.reason}", file=sys.stderr)
         return 0
     folder = args.dir if args.dir and args.dir.is_dir() else None
-    verdict = github.finish(api, args.repo, args.pr, folder, args.comment_id, args.head_sha, args.run_url)
+    verdict = github.finish(api, args.repo, args.pr, folder, args.comment_id, args.head_sha, args.run_url, automatic=args.automatic)
     print(f"verdict={verdict.value if verdict else 'none'}")
     return 0 if verdict else 1
